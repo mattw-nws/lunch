@@ -1,0 +1,38 @@
+{
+    "sr": {
+        "name": "NWM 3.0 Short Range",
+        "steps": 18,
+        "storeUrl": "/appdata/qzarr/sr.zarr",
+        "root": null,
+        "ref_time": null,
+        "feature_ids": null,
+        "times": null
+    },
+    "mrgfs1": {
+        "name": "NWM 3.0 Medium Range GFS",
+        "steps": 240,
+        "storeUrl": "/appdata/qzarr/mrgfs1.zarr",
+        "root": null,
+        "ref_time": null,
+        "feature_ids": null,
+        "times": null
+    },
+    "mrnbm": {
+        "name": "NWM 3.0 Medium Range Blend",
+        "steps": 239,
+        "storeUrl": "/appdata/qzarr/mrnbm.zarr",
+        "root": null,
+        "ref_time": null,
+        "feature_ids": null,
+        "times": null
+    },
+    "lr1": {
+        "name": "NWM 3.0 Long Range Member 1",
+        "steps": 119,
+        "storeUrl": "/appdata/qzarr/lr1.zarr",
+        "root": null,
+        "ref_time": null,
+        "feature_ids": null,
+        "times": null
+    }
+}

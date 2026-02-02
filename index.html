@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<head>
+    <title>Local Unit Normalized Composite Hydrograph</title>
+    <link rel="icon" type="image/x-icon" href="img/lunch.ico">
+    <link href="https://cdn.jsdelivr.net/npm/ol@10.6.1/ol.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/nouislider@15.8.1/dist/nouislider.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/nouislider@15.8.1/dist/nouislider.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container-fluid vh-100">
+        <h1 style="height: 1.2em;"><img src="img/lunch.svg" style="height: 100%;"> Local Unit Normalized Composite Hydrograph</h1>
+        <div class="row">
+            <div class="col">
+                <label for="model">Model: </label>
+                <select id="model" name="model" onchange="syncViews();">
+                    <!-- <option value="sr">NWM 3.0 Short Range</option>
+                    <option value="mrgfs1">NWM 3.0 Medium Range GFS</option>
+                    <option value="mrnbm">NWM 3.0 Medium Range Blend</option>
+                    <option value="lr1">NWM 3.0 Long Range Member 1</option> -->
+                </select>
+            </div>
+            <div class="col">
+                <label for="max-features">Max Features: </label>
+                <input id="max-features" name="max-features" type="number" min="1" max="999" value="250">
+            </div>
+            <div class="col">
+                Stream order: <div style="width: 150px; height: 20px; padding-left: 1em; display: inline-block;"><div id="order-slider"></div></div>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col">
+                <input type="radio" name="select" id="select-reaches" value="reaches" checked onchange="syncViews();">
+                <label for="select-reaches">Reaches</label>
+                <input type="radio" name="select" id="select-gages" value="gages" onchange="syncViews();">
+                <label for="select-gages">Gages</label> (ignores stream order)
+            </div>
+            <div class="col">
+                <input type="radio" name="series" id="series-q" value="q" onchange="syncViews();">
+                <label for="series-q">Discharge</label>
+                <input type="radio" name="series" id="series-uq" value="uq" checked onchange="syncViews();">
+                <label for="series-uq">Unit Discharge</label>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col">
+                <button id="btn-sync" class="btn btn-primary" onclick="syncPlot();">Load</button>
+            </div>
+            <div class="col">
+                <progress id="loaded-features" style="width: 100%;" max="100" value="0"></progress>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col">
+                <div id="map" style="width:100%; height: 700px;"></div>
+            </div>
+            <div class="col">
+                <div id="hydrograph" style="width:100%; height: 700px;"></div>
+            </div>
+        </div>
+    </div>
+    
+</body>
+<script type="module">
+    import * as zarr from "https://cdn.jsdelivr.net/npm/zarrita/+esm";
+    //import * as Plotly from 'https://cdn.jsdelivr.net/npm/plotly.js-dist/+esm';
+    import "https://cdn.plot.ly/plotly-3.1.0.min.js"
+
+    import { Map, View } from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/+esm';
+    import { GeoJSON } from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/format/+esm';
+    import { Vector } from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/source/+esm';
+    import { Tile, VectorTile, Vector as VectorLayer } from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/layer/+esm';
+    //import WebGLVectorTileLayer from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/layer/WebGLVectorTile.js/+esm';
+    import { OSM } from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/source/+esm';
+    import { PMTilesVectorSource } from 'https://cdn.jsdelivr.net/npm/ol-pmtiles@2.0.2/+esm';
+
+    const maxFeatures = 100;
+    let loadedFeatures = 0;
+    let loadingFeatures = 0;
+    let selectedFeatureIds = [];
+    let hoverFeatureId = 0;
+
+    const fetchOptions = { cache: 'no-cache' };
+    const storeOptions = { overrides: fetchOptions };
+    let models = {}
+
+    // Get drainage area values
+    let response = await fetch('/appdata/uq/jsbti.json');
+    if(!response.ok){
+        throw new Error(`Failed retrieving drainage area data! (${response.status})`);
+    }
+    const jsbti = await response.json();
+
+    async function warmUpModelMetadata(model){        
+        const modelinfo = models[model];
+        let store = modelinfo.store || (modelinfo.store = new zarr.FetchStore(new URL(modelinfo.storeUrl, window.location), storeOptions));
+        let root = modelinfo.root || (modelinfo.root = zarr.root(modelinfo.store));
+
+        let za_rt = await zarr.open(root.resolve('reference_time'), {kind:'array'});
+        let rt = await zarr.get(za_rt);
+        rt = new Date(Number(rt.data[0])*1000);
+        if(rt != modelinfo.ref_time){
+            modelinfo.times = null; // Necessary!
+            modelinfo.feature_ids = null; // Probably not necessary?
+        }
+        modelinfo.ref_time = rt;
+
+        let feature_ids = modelinfo.feature_ids;
+        if(!feature_ids){
+            let za_fids = await zarr.open(root.resolve('feature_id'), {kind:'array'});
+            feature_ids = await zarr.get(za_fids);
+            modelinfo.feature_ids = feature_ids;
+        }
+        let times = modelinfo.times;
+        if(!times){
+            let za_times = await zarr.open(root.resolve('time'), {kind:'array'});
+            let times = await zarr.get(za_times);
+            let dtimes = Array(times.data.length);
+            times.data.forEach((t,i) => {dtimes[i] = new Date(Number(t)*1000)});
+            times = dtimes;
+            modelinfo.times = times;
+        }
+        return;
+    }
+
+    //const f_id = 19406836;
+    //const f_id = 22005076;
+    async function seriesForReach(f_id, opts){
+        let model = opts.model;
+        let series_type = opts.series;
+        
+        const modelinfo = models[model]; 
+        let samples = modelinfo.steps;
+        let root = modelinfo.root;
+        let feature_ids = modelinfo.feature_ids;
+        let times = modelinfo.times;
+
+        const idx = feature_ids.data.indexOf(BigInt(f_id));
+        if(idx == -1){
+            console.log(`ERROR: Feature ID ${f_id} not found in model ${model}`);
+            updateFeaturesLoaded(1); //TODO: Move to wrapper/separate view and business logic concerns?
+            return {'q': Array(samples).fill(NaN), 'uq': Array(samples).fill(NaN), 'da': NaN};
+        }
+        let za_flow = await zarr.open(root.resolve('streamflow'), {kind:'array'});
+        let flow = await zarr.get(za_flow, [zarr.slice(0,samples), idx]);
+        flow = new Float32Array(flow.data);
+        
+        const digits = 9;
+        let address = f_id.toString().padStart(digits, '0').split('').map(x => parseInt(x));
+        let ptr = jsbti;
+        try {
+            address.forEach((d, i) => {ptr = ptr[d];});
+            //console.log(ptr);
+        } catch(e) {
+            console.log(`ERROR: No drainage area for feature ${f_id}`);
+            ptr = 9999999999;
+        }
+
+        let drainsqkm = ptr;
+        // console.log(`q: ${flow[0]}; drainsqkm: ${drainsqkm}; (f*35.31467): ${(flow[0]*35.31467)}; (drainsqkm*0.386102): ${(drainsqkm*0.386102)}; uq: ${(flow[0]*35.31467)/(drainsqkm*0.386102)} )`);
+        let q = flow.map(q => q*35.31467); // flow remains in metric if we want it later!
+        let uq = q.map(q => q/(drainsqkm*0.386102));
+        updateFeaturesLoaded(1); //TODO: Move to wrapper/separate view and business logic concerns?
+        return {'q': q, 'uq': uq, 'da': ptr};
+    }
+
+
+    // from https://www.30secondsofcode.org/js/s/array-sample-shuffle-weighted-selection/
+    function shuffle([...arr]){
+        let m = arr.length;
+        while (m) {
+            const i = Math.floor(Math.random() * m--);
+            [arr[m], arr[i]] = [arr[i], arr[m]];
+        }
+        return arr;
+    };
+
+
+    //document.getElementById('btn-sync').on('click', async function(evt){
+    async function loadPlot(opts){
+        const model = opts.model;
+        await warmUpModelMetadata(model);
+        const modelinfo = models[model];
+
+        let features, getName, getReachId, getNameShort, getOrder;
+        let maxFeatures = opts.maxFeatures || 50;
+        let orderMin = opts.orderMin;
+        let orderMax = opts.orderMax;
+        if(opts.select == 'reaches'){
+            //features = nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).sort((a,b) => b.get('order') - a.get('order')).slice(0,maxFeatures);
+            features = nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).filter(f => f.get('order') >= orderMin && f.get('order') <= orderMax);
+            features = shuffle(features).slice(0,maxFeatures).sort((a,b) => b.get('order') - a.get('order'));
+            features.forEach(f => f.getPropertiesInternal()['selected'] = true);
+            getReachId = function(f){ return f.getId(); }
+            getName = function(f){ return `${f.getId()}-${f.get('order')}`; }
+            getNameShort = getName;
+            getOrder = (f) => f.get('order');
+        } else if(opts.select == 'gages'){
+            features = shuffle(gageLayer.getSource().getFeaturesInExtent(map.getView().calculateExtent())).slice(0,maxFeatures);
+            getReachId = function(f){ return f.get('feature_id'); }
+            getName = function(f){ return `${f.get('site_name')}`; }
+            getNameShort = (f) => getName(f).slice(0,20);
+            getOrder = () => '-';
+        } else if(opts.select == 'huc'){
+            //TODO: Filter by HUC shape first using Turf.js
+            features = nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).sort((a,b) => b.get('order') - a.get('order')).slice(0,maxFeatures);
+            getReachId = function(f){ return f.getId(); }
+            getName = function(f){ return `${f.getId()}-${f.get('order')}`}
+            getNameShort = getName;
+            getOrder = (f) => f.get('order');
+        }
+
+
+        let fids = features.map(getReachId);
+        selectedFeatureIds = fids;
+        loadingFeatures = fids.length;
+        loadedFeatures = 0;
+        updateFeaturesLoaded(0);
+        updateNwmLayerStyle();
+
+        let layout = {
+            title: {text:'Local Unit Normalized Composite Hydrograph'},
+            margin: {
+                l: 50, r: 20, b: 50, t: 50
+            },
+            xaxis: { title: {text: 'Time' }},
+            annotations: [
+                {
+                    text: `${modelinfo.name} - init time ${modelinfo.ref_time.toISOString().replace(/(\d)T(\d)/, '$1 $2').replace(/:00.000Z/,'Z')}`,
+                    showarrow: false,
+                    font: {
+                        size: 10,
+                        color: 'gray'
+                    },
+                    xref: 'paper',
+                    yref: 'paper',
+                    xanchor: 'bottom',
+                    yanchor: 'left',
+                    x: -0.07,
+                    y: -0.08
+                }
+            ]
+        };
+
+        let hovertemplate;
+        if(opts.series == 'q'){
+            layout.yaxis = { title: {text: 'Q (cfs)'}}
+            hovertemplate = '<b>%{meta[0]}</b><br>'
+                + '<b>Q:</b> %{y:.2f} (cfs)<br>'
+                + '<b>UQ:</b> %{customdata:.2f} (cfs/sqmi)<br>'
+                + '<b>Stream Order:</b> %{meta[1]}<br>'
+                + '<b>Total Drainage Area:</b> %{meta[2]:.2f} sqmi<extra></extra>';
+        } else {
+            layout.yaxis = { title: {text: 'UQ (cfs/sqmi)'}}
+            hovertemplate = '<b>%{meta[0]}</b><br>'
+                + '<b>UQ:</b> %{y:.2f} (cfs/sqmi)<br>'
+                + '<b>Q:</b> %{customdata:.2f} (cfs)<br>'
+                + '<b>Stream Order:</b> %{meta[1]}<br>'
+                + '<b>Total Drainage Area:</b> %{meta[2]:.2f} sqmi<extra></extra>';
+        }
+
+        const orderColors = {
+            1: 'rgba(191,0,0,0.5)',
+            2: 'rgba(191,95,0,0.5)',
+            3: 'rgba(191,191,0,0.5)',
+            4: 'rgba(95,191,0,0.5)',
+            5: 'rgba(0,191,0,0.5)',
+            6: 'rgba(0,191,95,0.5)',
+            7: 'rgba(0,191,191,0.5)',
+            8: 'rgba(0,95,191,0.5)',
+            9: 'rgba(0,0,191,0.5)',
+            10: 'rgba(95,0,191,0.5)'
+        };
+        let promises = fids.map(f_id => seriesForReach(f_id, opts));
+        let uqs = await Promise.all(promises);
+        let max = 0;
+        let traces = uqs.map((t,i) => {
+            if(opts.series != 'q'){
+                max = Math.max(max, Math.max(...t.uq) || max); // the || catches NaN returns from trace max
+            }
+            return {
+                x: modelinfo.times, 
+                y: (opts.series == 'q' ? t.q : t.uq),
+                customdata: (opts.series == 'q' ? t.uq : t.q),
+                mode: 'lines', 
+                name: getNameShort(features[i]),
+                featureId: fids[i],
+                meta: [getName(features[i]), getOrder(features[i]), (t.da*0.386102)],
+                hovertemplate: hovertemplate,
+                legendgroup: (opts.select == 'reaches' ? String(getOrder(features[i])) : undefined),
+                legendgrouptitle: (opts.select == 'reaches' ? {text: `<b>Order ${getOrder(features[i])}</b>`} : undefined),
+                line: {
+                    color: orderColors[getOrder(features[i])],
+                    width: 0.8,
+                    opacity: 0.2
+                }
+            };
+        });
+
+        if(false && opts.series != 'q'){
+            const flashes = [
+                [10, 20, [255,255,0]],
+                [20, 40, [238,118,19]],
+                [40, 60, [234,61,61]],
+                [60, 100, [247,51,182]],
+                [100, 120, [[35,47,241]]]
+            ]
+            let fill = undefined;
+            if(max >= flashes[0][0]) for(let flash of flashes){
+                if(max > flash[0]){
+                    traces.unshift({
+                        x: [modelinfo.times[0], modelinfo.times[modelinfo.times.length - 1]],
+                        y: [flash[0], flash[0]],
+                        mode: 'lines',
+                        type: "scatter",
+                        fill: fill,
+                        fillcolor: `rgba(${flash[2][0]},${flash[2][1]},${flash[2][2]},0.2)`,
+                        line: { color: 'rgba(0,0,0,0)' },
+                        legendgroup: 'FLASH',
+                        legendgrouptitle: {text: "<b>FLASH Thresholds</b>"}
+                    });
+                    fill = 'tonexty';
+                } else {
+                    traces.unshift({
+                        x: [modelinfo.times[0], modelinfo.times[modelinfo.times.length - 1]],
+                        y: [flash[0], flash[0]],
+                        mode: 'lines',
+                        type: "scatter",
+                        fill: fill,
+                        fillcolor: `rgba(${flash[2][0]},${flash[2][1]},${flash[2][2]},0.2)`,
+                        line: { color: 'rgba(0,0,0,0)' },
+                        legendgroup: 'FLASH',
+                        legendgrouptitle: {text: "<b>FLASH Thresholds</b>"}
+                    });
+                    break;
+                }
+            }
+        }
+
+        const plotDiv = document.getElementById('hydrograph');
+        let plot = Plotly.newPlot(plotDiv, traces, layout);
+        plotDiv.on('plotly_hover', function(data){
+            if (data.points && data.points.length > 0) {
+                hoverFeatureId = data.points[0].data.featureId;
+                updateNwmLayerStyle();
+            }
+        })
+    };
+
+
+    // MAP
+
+    //const nwmLayer = new WebGLVectorTileLayer({
+    const nwmLayer = new VectorTile({
+        source: new PMTilesVectorSource({
+            url:"/appdata/nwmtiles/nwm_3_sf_20250708T220000.pmtiles",
+            attributions:["NWM v3 Reaches"]
+        }),
+        style: {
+            "stroke-color": [0,0,191,0.8],
+            "stroke-width": ['*',["get","order"],0.8]
+        }
+    });
+    updateNwmLayerStyle();
+
+    const gageLayer = new VectorLayer({
+        source: new Vector({
+            url: '/appdata/static/assim_gages_geo.json',
+            format: new GeoJSON(),
+            wrapX: true
+        }),
+        style: {
+            "circle-radius": ["interpolate", ["linear"], ["resolution"], 500, 4, 5000, 1],
+            "circle-fill-color": [0,255,0,1.0],
+            "circle-stroke-color": [0,127,0,1.0],
+            "circle-stroke-width": 1
+        }
+    }) 
+
+    const map = new Map({
+        target: "map",
+        layers: [
+            new Tile({
+            source: new OSM(),
+            visible: true,
+            }),
+            nwmLayer,
+            gageLayer,
+        ],
+        view: new View({
+            center: [-10822895.779350141, 4812162.860382532],
+            zoom: 4.3,
+        }),
+    });
+
+    // VIEW
+
+    let orderSlider = document.getElementById('order-slider');
+
+    noUiSlider.create(orderSlider, {
+        start: [1, 9],
+        connect: true,
+        tooltips: [true, true],
+        step: 1,
+        range: {
+            'min': 1,
+            'max': 10
+        }
+    });
+    orderSlider.noUiSlider.on('update', syncViews);
+
+    function populateModelSelect(){
+        let select = document.querySelector(`select[name="model"]`);
+        for(let m in models){
+            let option = document.createElement('option');
+            option.value = m;
+            option.text = models[m].name;
+            select.appendChild(option);
+        }
+    }
+
+    function updateNwmLayerStyle(){
+        let orderMin = 0, orderMax = 10;
+        try {
+            orderMin = orderSlider.noUiSlider.get(true)[0];
+            orderMax = orderSlider.noUiSlider.get(true)[1];
+        } catch {
+            // do nothing
+        }
+        nwmLayer.setStyle([
+            {
+                filter: ["==",["id"],hoverFeatureId],
+                style: {
+                    "stroke-color": [255,255,0,1.0],
+                    "stroke-width": 12
+                }
+            },
+            {
+                else: true,
+                filter: ["in",["id"],selectedFeatureIds],
+                style: {
+                    "stroke-color": [0,191,191,1.0],
+                    "stroke-width": 12
+                }
+            },
+            {
+                else: true,
+                style: {
+                    "stroke-color": ["case",
+                        ["all",[">=",["get","order"],orderMin],["<=",["get","order"],orderMax]], [0,0,191,0.5],
+                        [0,0,191,0.1]
+                    ],
+                    "stroke-width": ['*',["get","order"], ["interpolate", ["linear"], ["resolution"], 100, 0.7, 5000, 0.1]]
+                }
+            }
+        ]);
+    }
+
+    function syncViews(){
+        updateNwmLayerStyle();
+    }
+
+    function syncPlot(){
+        let opts = {model: 'mrnbm', steps: 18};
+        opts['model'] = document.querySelector(`select[name="model"]`).value;
+        opts['maxFeatures'] = document.querySelector(`input[name="max-features"]`).value
+        opts['orderMin'] = orderSlider.noUiSlider.get(true)[0];
+        opts['orderMax'] = orderSlider.noUiSlider.get(true)[1];
+        opts['select'] = document.querySelector(`input[name="select"]:checked`).value;
+        opts['series'] = document.querySelector(`input[name="series"]:checked`).value;
+        loadPlot(opts);
+    }
+
+    function updateFeaturesLoaded(addLoaded){
+        loadedFeatures += addLoaded;
+        let el = document.getElementById('loaded-features');
+        el.max = loadingFeatures;
+        el.value = loadedFeatures;
+    }
+
+    window.zarr = zarr;
+    
+    window.models = models;
+    window.map = map;
+    window.nwmLayer = nwmLayer;
+
+    window.updateNwmLayerStyle = updateNwmLayerStyle;
+    window.seriesForReach = seriesForReach;
+    window.syncViews = syncViews;
+    window.syncPlot = syncPlot;
+    window.populateModelSelect = populateModelSelect;
+
+    // Load and Go...
+    let modeldefs = await fetch(new URL('config/model_defs.json', window.location), fetchOptions);
+    let modeldefsjson = await modeldefs.json();
+    models = modeldefsjson;
+    populateModelSelect();
+
+
+</script>
+</html>
