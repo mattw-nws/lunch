@@ -85,6 +85,11 @@
     const storeOptions = { overrides: fetchOptions };
     let models = {}
 
+    let nonlocals = {
+        nwmLayer: null,
+        gageLayer: null
+    }
+
     // Get drainage area values
     let response = await fetch('/appdata/uq/jsbti.json');
     if(!response.ok){
@@ -189,7 +194,7 @@
         let orderMax = opts.orderMax;
         if(opts.select == 'reaches'){
             //features = nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).sort((a,b) => b.get('order') - a.get('order')).slice(0,maxFeatures);
-            features = nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).filter(f => f.get('order') >= orderMin && f.get('order') <= orderMax);
+            features = nonlocals.nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).filter(f => f.get('order') >= orderMin && f.get('order') <= orderMax);
             features = shuffle(features).slice(0,maxFeatures).sort((a,b) => b.get('order') - a.get('order'));
             features.forEach(f => f.getPropertiesInternal()['selected'] = true);
             getReachId = function(f){ return f.getId(); }
@@ -197,14 +202,14 @@
             getNameShort = getName;
             getOrder = (f) => f.get('order');
         } else if(opts.select == 'gages'){
-            features = shuffle(gageLayer.getSource().getFeaturesInExtent(map.getView().calculateExtent())).slice(0,maxFeatures);
+            features = shuffle(nonlocals.gageLayer.getSource().getFeaturesInExtent(map.getView().calculateExtent())).slice(0,maxFeatures);
             getReachId = function(f){ return f.get('feature_id'); }
             getName = function(f){ return `${f.get('site_name')}`; }
             getNameShort = (f) => getName(f).slice(0,20);
             getOrder = () => '-';
         } else if(opts.select == 'huc'){
             //TODO: Filter by HUC shape first using Turf.js
-            features = nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).sort((a,b) => b.get('order') - a.get('order')).slice(0,maxFeatures);
+            features = nonlocals.nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).sort((a,b) => b.get('order') - a.get('order')).slice(0,maxFeatures);
             getReachId = function(f){ return f.getId(); }
             getName = function(f){ return `${f.getId()}-${f.get('order')}`}
             getNameShort = getName;
@@ -217,7 +222,7 @@
         loadingFeatures = fids.length;
         loadedFeatures = 0;
         updateFeaturesLoaded(0);
-        updateNwmLayerStyle();
+        updateNwmLayerStyle(nonlocals.nwmLayer);
 
         let layout = {
             title: {text:'Local Unit Normalized Composite Hydrograph'},
@@ -343,7 +348,7 @@
         plotDiv.on('plotly_hover', function(data){
             if (data.points && data.points.length > 0) {
                 hoverFeatureId = data.points[0].data.featureId;
-                updateNwmLayerStyle();
+                updateNwmLayerStyle(nonlocals.nwmLayer);
             }
         })
     };
@@ -351,42 +356,42 @@
 
     // MAP
 
-    //const nwmLayer = new WebGLVectorTileLayer({
-    const nwmLayer = new VectorTile({
-        source: new PMTilesVectorSource({
-            url:"/appdata/nwmtiles/nwm_3_sf_20250708T220000.pmtiles",
-            attributions:["NWM v3 Reaches"]
-        }),
-        style: {
-            "stroke-color": [0,0,191,0.8],
-            "stroke-width": ['*',["get","order"],0.8]
-        }
-    });
-    updateNwmLayerStyle();
+    function getReachesLayer(reaches_config){
+        return new VectorTile({
+            source: new PMTilesVectorSource({
+                url: reaches_config.url,
+                attributions: reaches_config?.attributions || [],
+            }),
+            style: {
+                "stroke-color": [0,0,191,0.8],
+                "stroke-width": ['*',["get","order"],0.8]
+            }
+        });
+    }
 
-    const gageLayer = new VectorLayer({
-        source: new Vector({
-            url: '/appdata/static/assim_gages_geo.json',
-            format: new GeoJSON(),
-            wrapX: true
-        }),
-        style: {
-            "circle-radius": ["interpolate", ["linear"], ["resolution"], 500, 4, 5000, 1],
-            "circle-fill-color": [0,255,0,1.0],
-            "circle-stroke-color": [0,127,0,1.0],
-            "circle-stroke-width": 1
-        }
-    }) 
-
+    function getGagesLayer(gages_config){
+        return new VectorLayer({
+            source: new Vector({
+                url: gages_config.url,
+                format: new GeoJSON(),
+                wrapX: true
+            }),
+            style: {
+                "circle-radius": ["interpolate", ["linear"], ["resolution"], 500, 4, 5000, 1],
+                "circle-fill-color": [0,255,0,1.0],
+                "circle-stroke-color": [0,127,0,1.0],
+                "circle-stroke-width": 1
+            }
+        });
+    }
+    
     const map = new Map({
         target: "map",
         layers: [
             new Tile({
             source: new OSM(),
             visible: true,
-            }),
-            nwmLayer,
-            gageLayer,
+            })
         ],
         view: new View({
             center: [-10822895.779350141, 4812162.860382532],
@@ -420,7 +425,7 @@
         }
     }
 
-    function updateNwmLayerStyle(){
+    function updateNwmLayerStyle(nwmLayer){
         let orderMin = 0, orderMax = 10;
         try {
             orderMin = orderSlider.noUiSlider.get(true)[0];
@@ -458,7 +463,8 @@
     }
 
     function syncViews(){
-        updateNwmLayerStyle();
+        if(nonlocals.nwmLayer)
+            updateNwmLayerStyle(nonlocals.nwmLayer);
     }
 
     function syncPlot(){
@@ -479,24 +485,34 @@
         el.value = loadedFeatures;
     }
 
+
+    // Load and Go...
+    let config = await fetch(new URL('config/lunch.json', window.location), fetchOptions);
+    let configjson = await config.json();
+    const reaches_config = configjson.data_sources.reaches;
+    const gages_config = configjson.data_sources.gages;
+    nonlocals.nwmLayer = getReachesLayer(reaches_config);
+    nonlocals.gageLayer = getGagesLayer(gages_config);
+    map.addLayer(nonlocals.nwmLayer);
+    map.addLayer(nonlocals.gageLayer);
+    updateNwmLayerStyle(nonlocals.nwmLayer);
+    let modeldefs = await fetch(new URL('config/model_defs.json', window.location), fetchOptions);
+    let modeldefsjson = await modeldefs.json();
+    models = modeldefsjson;
+    populateModelSelect();
+
+    // Expose to window for debugging
     window.zarr = zarr;
     
     window.models = models;
     window.map = map;
-    window.nwmLayer = nwmLayer;
+    window.nwmLayer = nonlocals.nwmLayer;
 
     window.updateNwmLayerStyle = updateNwmLayerStyle;
     window.seriesForReach = seriesForReach;
     window.syncViews = syncViews;
     window.syncPlot = syncPlot;
     window.populateModelSelect = populateModelSelect;
-
-    // Load and Go...
-    let modeldefs = await fetch(new URL('config/model_defs.json', window.location), fetchOptions);
-    let modeldefsjson = await modeldefs.json();
-    models = modeldefsjson;
-    populateModelSelect();
-
 
 </script>
 </html>

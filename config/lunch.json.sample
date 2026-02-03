@@ -1,0 +1,11 @@
+{
+    "data_sources": {
+        "reaches": {
+            "url": "/appdata/nwmtiles/nwm_3.pmtiles",
+            "attributions": ["NWM v3 Reaches"]
+        },
+        "gages": {
+            "url": "/appdata/static/assim_gages_geo.json"
+        }
+    }
+}
