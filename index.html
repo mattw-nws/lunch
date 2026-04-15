@@ -63,7 +63,7 @@
     
 </body>
 <script type="module">
-    import * as zarr from "https://cdn.jsdelivr.net/npm/zarrita/+esm";
+    import * as zarr from "https://cdn.jsdelivr.net/npm/zarrita@0.6.2/+esm";
     //import * as Plotly from 'https://cdn.jsdelivr.net/npm/plotly.js-dist/+esm';
     import "https://cdn.plot.ly/plotly-3.1.0.min.js"
 
@@ -90,12 +90,20 @@
         gageLayer: null
     }
 
+    // // Get drainage area values
+    // let response = await fetch('/appdata/uq/jsbti.json');
+    // if(!response.ok){
+    //     throw new Error(`Failed retrieving drainage area data! (${response.status})`);
+    // }
+    // const jsbti = await response.json();
     // Get drainage area values
-    let response = await fetch('/appdata/uq/jsbti.json');
-    if(!response.ok){
-        throw new Error(`Failed retrieving drainage area data! (${response.status})`);
-    }
-    const jsbti = await response.json();
+    const dastore = new zarr.FetchStore(new URL('/appdata/totda.zarr', window.location), storeOptions);
+    const daroot = zarr.root(dastore);
+    const za_da_fids = await zarr.open(daroot.resolve('id'), {kind:'array'});
+    const da_feature_ids = await zarr.get(za_da_fids);
+    // Go ahead and load all drainage area data, it's worth the memory cost...
+    let za_totda = await zarr.open(daroot.resolve('totda'), {kind: 'array'});
+    let totda_all = await zarr.get(za_totda);
 
     async function warmUpModelMetadata(model){        
         const modelinfo = models[model];
@@ -151,23 +159,39 @@
         let flow = await zarr.get(za_flow, [zarr.slice(0,samples), idx]);
         flow = new Float32Array(flow.data);
         
-        const digits = 9;
-        let address = f_id.toString().padStart(digits, '0').split('').map(x => parseInt(x));
-        let ptr = jsbti;
-        try {
-            address.forEach((d, i) => {ptr = ptr[d];});
-            //console.log(ptr);
-        } catch(e) {
+        // const digits = 9;
+        // let address = f_id.toString().padStart(digits, '0').split('').map(x => parseInt(x));
+        // let ptr = jsbti;
+        // try {
+        //     address.forEach((d, i) => {ptr = ptr[d];});
+        //     //console.log(ptr);
+        // } catch(e) {
+        //     console.log(`ERROR: No drainage area for feature ${f_id}`);
+        //     ptr = 9999999999;
+        // }
+
+        const da_idx = da_feature_ids.data.indexOf(BigInt(f_id));
+        let drainsqkm;
+        if(da_idx == -1){
             console.log(`ERROR: No drainage area for feature ${f_id}`);
-            ptr = 9999999999;
+            drainsqkm = 9999999999;
+        } else {
+            // const da_idx = da_feature_ids.data.indexOf(BigInt(f_id));
+            // let za_totda = await zarr.open(daroot.resolve('totda'), {kind: 'array'});
+            // let totda = await zarr.get(za_totda, [da_idx]);
+            // let da = Number(totda);
+            let da = Number(totda_all.data[da_idx]);
+            drainsqkm = da;
         }
 
-        let drainsqkm = ptr;
+        //console.log(f_id, ptr, drainsqkm)
+        //let drainsqkm = ptr;
+
         // console.log(`q: ${flow[0]}; drainsqkm: ${drainsqkm}; (f*35.31467): ${(flow[0]*35.31467)}; (drainsqkm*0.386102): ${(drainsqkm*0.386102)}; uq: ${(flow[0]*35.31467)/(drainsqkm*0.386102)} )`);
         let q = flow.map(q => q*35.31467); // flow remains in metric if we want it later!
         let uq = q.map(q => q/(drainsqkm*0.386102));
         updateFeaturesLoaded(1); //TODO: Move to wrapper/separate view and business logic concerns?
-        return {'q': q, 'uq': uq, 'da': ptr};
+        return {'q': q, 'uq': uq, 'da': drainsqkm};
     }
 
 
