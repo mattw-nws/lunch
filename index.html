@@ -537,6 +537,11 @@
         let opts = getOpts();
         if(nonlocals.nwmLayer)
             updateNwmLayerStyle(nonlocals.nwmLayer, opts);
+        if(opts.select == 'reaches'){
+            orderSlider.noUiSlider.enable();
+        } else {
+            orderSlider.noUiSlider.disable();
+        }
     }
 
     /**
