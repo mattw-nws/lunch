@@ -267,7 +267,7 @@
             loadingFeatures = fids.length;
             loadedFeatures = 0;
             updateFeaturesLoaded(0);
-            updateNwmLayerStyle(nonlocals.nwmLayer);
+            updateNwmLayerStyle(nonlocals.nwmLayer, opts);
 
             let promises = fids.map(f_id => seriesForReach(f_id, opts));
             uqs = await Promise.all(promises);
@@ -415,7 +415,7 @@
         plotDiv.on('plotly_hover', function(data){
             if (data.points && data.points.length > 0) {
                 hoverFeatureId = data.points[0].data.featureId;
-                updateNwmLayerStyle(nonlocals.nwmLayer);
+                updateNwmLayerStyle(nonlocals.nwmLayer, opts);
             }
         })
     };
@@ -493,11 +493,11 @@
         }
     }
 
-    function updateNwmLayerStyle(nwmLayer){
+    function updateNwmLayerStyle(nwmLayer, opts){
         let orderMin = 0, orderMax = 10;
         try {
-            orderMin = orderSlider.noUiSlider.get(true)[0];
-            orderMax = orderSlider.noUiSlider.get(true)[1];
+                orderMin = opts['orderMin'];
+                orderMax = opts['orderMax'];
         } catch {
             // do nothing
         }
@@ -531,8 +531,9 @@
     }
 
     function syncViews(){
+        let opts = getOpts();
         if(nonlocals.nwmLayer)
-            updateNwmLayerStyle(nonlocals.nwmLayer);
+            updateNwmLayerStyle(nonlocals.nwmLayer, opts);
     }
 
     /**
@@ -573,11 +574,12 @@
     let configjson = await config.json();
     const reaches_config = configjson.data_sources.reaches;
     const gages_config = configjson.data_sources.gages;
+    let opts = getOpts();
     nonlocals.nwmLayer = getReachesLayer(reaches_config);
     nonlocals.gageLayer = getGagesLayer(gages_config);
     map.addLayer(nonlocals.nwmLayer);
     map.addLayer(nonlocals.gageLayer);
-    updateNwmLayerStyle(nonlocals.nwmLayer);
+    updateNwmLayerStyle(nonlocals.nwmLayer, opts);
     let modeldefs = await fetch(new URL('config/model_defs.json', window.location), fetchOptions);
     let modeldefsjson = await modeldefs.json();
     models = modeldefsjson;
