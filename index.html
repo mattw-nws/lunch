@@ -37,10 +37,18 @@
                 <label for="select-gages">Gages</label> (ignores stream order)
             </div>
             <div class="col">
+            </div>
+            <div class="col">
                 <input type="radio" name="series" id="series-q" value="q" onchange="syncViews(); syncPlot();">
                 <label for="series-q">Discharge</label>
                 <input type="radio" name="series" id="series-uq" value="uq" checked onchange="syncViews(); syncPlot();">
                 <label for="series-uq">Unit Discharge</label>
+            </div>
+            <div class="col">
+                <input type="radio" name="ylog" id="ylog-false" value="linear" checked onchange="syncViews(); syncPlot();">
+                <label for="ylog-false">Linear</label>
+                <input type="radio" name="ylog" id="ylog-true" value="log" onchange="syncViews(); syncPlot();">
+                <label for="ylog-true">Logarithmic</label>
             </div>
         </div>
         <div class="row">
@@ -312,6 +320,7 @@
                 + '<b>Stream Order:</b> %{meta[1]}<br>'
                 + '<b>Total Drainage Area:</b> %{meta[2]:.2f} sqmi<extra></extra>';
         }
+        layout.yaxis['type'] = opts.yLog;
 
         const orderColors = {
             1: 'rgba(191,0,0,0.5)',
@@ -522,6 +531,7 @@
         opts['orderMax'] = orderSlider.noUiSlider.get(true)[1];
         opts['select'] = document.querySelector(`input[name="select"]:checked`).value;
         opts['series'] = document.querySelector(`input[name="series"]:checked`).value;
+        opts['yLog'] = document.querySelector(`input[name="ylog"]:checked`).value;
         loadPlot(opts);
     }
 
