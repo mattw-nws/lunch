@@ -18,6 +18,10 @@
         <h1 style="height: 1.2em;"><img src="img/lunch.svg" style="height: 100%;"> Local Unit Normalized Composite Hydrograph</h1>
         <div class="row">
             <div class="col">
+                <label for="max-features">Max Features: </label>
+                <input id="max-features" name="max-features" type="number" min="1" max="999" value="250">
+            </div>
+            <div class="col">
                 <label for="model">Model: </label>
                 <select id="model" name="model" onchange="syncViews();">
                     <!-- <option value="sr">NWM 3.0 Short Range</option>
@@ -25,13 +29,6 @@
                     <option value="mrnbm">NWM 3.0 Medium Range Blend</option>
                     <option value="lr1">NWM 3.0 Long Range Member 1</option> -->
                 </select>
-            </div>
-            <div class="col">
-                <label for="max-features">Max Features: </label>
-                <input id="max-features" name="max-features" type="number" min="1" max="999" value="250">
-            </div>
-            <div class="col">
-                Stream order: <div style="width: 150px; height: 20px; padding-left: 1em; display: inline-block;"><div id="order-slider"></div></div>
             </div>
         </div>
         <div class="row">
@@ -42,6 +39,7 @@
                 <label for="select-gages">Gages</label> (ignores stream order)
             </div>
             <div class="col">
+                Stream order: <div style="width: 150px; height: 20px; padding-left: 1em; display: inline-block;"><div id="order-slider"></div></div>
             </div>
             <div class="col">
                 <input type="radio" name="series" id="series-q" value="q" onchange="syncViews(); syncPlot();">
