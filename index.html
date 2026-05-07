@@ -23,7 +23,7 @@
             </div>
             <div class="col">
                 <label for="model">Model: </label>
-                <select id="model" name="model" onchange="syncViews();">
+                <select id="model" name="model" onchange="syncViews(); dataLoadPlot();">
                     <!-- <option value="sr">NWM 3.0 Short Range</option>
                     <option value="mrgfs1">NWM 3.0 Medium Range GFS</option>
                     <option value="mrnbm">NWM 3.0 Medium Range Blend</option>
@@ -92,7 +92,7 @@
     let selectedFeatureIds = [];
     let hoverFeatureId = 0;
 
-    let last_data;
+    let last_data = false;
 
     const fetchOptions = { cache: 'no-cache' };
     const storeOptions = { overrides: fetchOptions };
@@ -238,7 +238,7 @@
         let maxFeatures = opts.maxFeatures || 50;
         let orderMin = opts.orderMin;
         let orderMax = opts.orderMax;
-        if(!last_data){
+        if(!last_data['features']){
             if(opts.select == 'reaches'){
                 //features = nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).sort((a,b) => b.get('order') - a.get('order')).slice(0,maxFeatures);
                 features = nonlocals.nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).filter(f => f.get('order') >= orderMin && f.get('order') <= orderMax);
@@ -264,15 +264,10 @@
             }
             fids = features.map(getReachId);
             selectedFeatureIds = fids;
-            loadingFeatures = fids.length;
-            loadedFeatures = 0;
-            updateFeaturesLoaded(0);
             updateNwmLayerStyle(nonlocals.nwmLayer, opts);
 
-            let promises = fids.map(f_id => seriesForReach(f_id, opts));
-            uqs = await Promise.all(promises);
             last_data = {
-                uqs: uqs,
+                uqs: false, // This will force loading data when features change
                 features: features,
                 fids: fids,
                 getNameShort: getNameShort,
@@ -282,13 +277,23 @@
             };
             window.last_data = last_data;
         } else {
-            uqs = last_data.uqs;
+            // uqs = last_data.uqs;
             features = last_data.features;
             fids = last_data.fids;
             getNameShort = last_data.getNameShort;
             getName = last_data.getName;
             getOrder = last_data.getOrder;
             getReachId = last_data.getReachId;
+        }
+        if(!last_data['uqs']){
+            loadingFeatures = fids.length;
+            loadedFeatures = 0;
+            updateFeaturesLoaded(0);
+            let promises = fids.map(f_id => seriesForReach(f_id, opts));
+            uqs = await Promise.all(promises);
+            last_data['uqs'] = uqs;
+        } else {
+            uqs = last_data.uqs
         }
 
         let layout = {
@@ -564,6 +569,21 @@
         loadPlot(opts);
     }
 
+    /**
+     * Loads only new data for existing selected features, if possible.
+     */
+    function dataLoadPlot(){
+        if(!last_data){
+            fullLoadPlot();
+        } else {
+            last_data['uqs'] = false;
+            syncPlot();
+        }
+    }
+
+    /**
+     * Loads the plot from scratch, forcing new features sampling and plot data loading.
+     */
     function fullLoadPlot(){
         last_data = false;
         syncPlot();
@@ -604,6 +624,7 @@
     window.seriesForReach = seriesForReach;
     window.syncViews = syncViews;
     window.syncPlot = syncPlot;
+    window.dataLoadPlot = dataLoadPlot;
     window.fullLoadPlot = fullLoadPlot;
     window.populateModelSelect = populateModelSelect;
 
