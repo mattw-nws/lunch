@@ -535,7 +535,10 @@
             updateNwmLayerStyle(nonlocals.nwmLayer);
     }
 
-    function syncPlot(){
+    /**
+     * Gather an options dict from the UI
+     */
+    function getOpts(){
         let opts = {model: 'mrnbm', steps: 18};
         opts['model'] = document.querySelector(`select[name="model"]`).value;
         opts['maxFeatures'] = document.querySelector(`input[name="max-features"]`).value
@@ -544,6 +547,11 @@
         opts['select'] = document.querySelector(`input[name="select"]:checked`).value;
         opts['series'] = document.querySelector(`input[name="series"]:checked`).value;
         opts['yLog'] = document.querySelector(`input[name="ylog"]:checked`).value;
+        return opts;
+    }
+
+    function syncPlot(){
+        let opts = getOpts();
         loadPlot(opts);
     }
 
