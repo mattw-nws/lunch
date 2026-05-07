@@ -494,10 +494,13 @@
     }
 
     function updateNwmLayerStyle(nwmLayer, opts){
-        let orderMin = 0, orderMax = 10;
+        let orderMin = 0, orderMax = 0, reachesSelected = false;
         try {
+            reachesSelected = opts['select'] == 'reaches';
+            if(reachesSelected){
                 orderMin = opts['orderMin'];
                 orderMax = opts['orderMax'];
+            }
         } catch {
             // do nothing
         }
@@ -521,7 +524,7 @@
                 else: true,
                 style: {
                     "stroke-color": ["case",
-                        ["all",[">=",["get","order"],orderMin],["<=",["get","order"],orderMax]], [0,0,191,0.5],
+                        ["all",[">=",["get","order"],orderMin],["<=",["get","order"],orderMax]], [0,0,191, 0.5],
                         [0,0,191,0.1]
                     ],
                     "stroke-width": ['*',["get","order"], ["interpolate", ["linear"], ["resolution"], 100, 0.7, 5000, 0.1]]
