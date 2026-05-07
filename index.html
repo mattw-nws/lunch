@@ -5,6 +5,7 @@
     <link href="https://cdn.jsdelivr.net/npm/ol@10.6.1/ol.min.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css">
     <script src="https://cdn.jsdelivr.net/npm/nouislider@15.8.1/dist/nouislider.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/nouislider@15.8.1/dist/nouislider.min.css" rel="stylesheet">
     <style>
@@ -17,13 +18,18 @@
     <div class="container-fluid vh-100">
         <h1 style="height: 1.2em;"><img src="img/lunch.svg" style="height: 100%;"> Local Unit Normalized Composite Hydrograph</h1>
         <div class="row">
-            <div class="col">
-                <label for="max-features">Max Features: </label>
-                <input id="max-features" name="max-features" type="number" min="1" max="999" value="250">
+            <div class="col align-items-center">
+                <div class="form-check form-check-inline">
+                    <input type="radio" class="form-check-input" name="select" id="select-reaches" value="reaches" checked onchange="syncViews();">
+                    <label class="form-check-label" for="select-reaches">Reaches</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input type="radio" class="form-check-input" name="select" id="select-gages" value="gages" onchange="syncViews();">
+                    <label class="form-check-label" for="select-gages">Gages</label> (ignores stream order)
+                </div>
             </div>
             <div class="col">
-                <label for="model">Model: </label>
-                <select id="model" name="model" onchange="syncViews(); dataLoadPlot();">
+                <select class="form-select" id="model" name="model" aria-label="Dataset select" onchange="syncViews(); dataLoadPlot();">
                     <!-- <option value="sr">NWM 3.0 Short Range</option>
                     <option value="mrgfs1">NWM 3.0 Medium Range GFS</option>
                     <option value="mrnbm">NWM 3.0 Medium Range Blend</option>
@@ -32,31 +38,44 @@
             </div>
         </div>
         <div class="row">
-            <div class="col">
-                <input type="radio" name="select" id="select-reaches" value="reaches" checked onchange="syncViews();">
-                <label for="select-reaches">Reaches</label>
-                <input type="radio" name="select" id="select-gages" value="gages" onchange="syncViews();">
-                <label for="select-gages">Gages</label> (ignores stream order)
+            <div class="col align-items-center">
+                <div class="input-group">
+                    <div for="max-features" class="input-group-text">Max Features</div>
+                    <input id="max-features" class="form-control" name="max-features" type="number" min="1" max="999" value="250">
+                </div>
             </div>
-            <div class="col">
-                Stream order: <div style="width: 150px; height: 20px; padding-left: 1em; display: inline-block;"><div id="order-slider"></div></div>
+            <div class="col align-items-center">
+                <div class="form-text">
+                    Stream order: <div style="width: 150px; height: 20px; padding-left: 1em; display: inline-block;"><div id="order-slider"></div></div>
+                </div>
             </div>
-            <div class="col">
-                <input type="radio" name="series" id="series-q" value="q" onchange="syncViews(); syncPlot();">
-                <label for="series-q">Discharge</label>
-                <input type="radio" name="series" id="series-uq" value="uq" checked onchange="syncViews(); syncPlot();">
-                <label for="series-uq">Unit Discharge</label>
+            <div class="col align-items-center">
+                <div class="form-check form-check-inline">
+                    <input type="radio" class="form-check-input" name="series" id="series-q" value="q" onchange="syncViews(); syncPlot();">
+                    <label class="form-check-label" for="series-q">Discharge</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input type="radio" class="form-check-input" name="series" id="series-uq" value="uq" checked onchange="syncViews(); syncPlot();">
+                    <label class="form-check-label" for="series-uq">Unit Discharge</label>
+                </div>
             </div>
-            <div class="col">
-                <input type="radio" name="ylog" id="ylog-false" value="linear" checked onchange="syncViews(); syncPlot();">
-                <label for="ylog-false">Linear</label>
-                <input type="radio" name="ylog" id="ylog-true" value="log" onchange="syncViews(); syncPlot();">
-                <label for="ylog-true">Logarithmic</label>
+            <div class="col align-items-center">
+                <div class="form-check form-check-inline">
+                    <input type="radio" class="form-check-input" name="ylog" id="ylog-false" value="linear" checked onchange="syncViews(); syncPlot();">
+                    <label class="form-check-label" for="ylog-false">Linear</label>
+                </div>
+                <div class="form-check form-check-inline">
+                    <input type="radio" class="form-check-input" name="ylog" id="ylog-true" value="log" onchange="syncViews(); syncPlot();">
+                    <label class="form-check-label" for="ylog-true">Logarithmic</label>
+                </div>
             </div>
         </div>
         <div class="row">
-            <div class="col">
-                <button id="btn-sync" class="btn btn-primary" onclick="fullLoadPlot();">Load</button>
+            <div class="col align-items-center">
+                <button id="btn-sync" class="btn btn-primary" onclick="fullLoadPlot();">
+                    <i class="bi bi-arrow-clockwise"></i>
+                    Load
+                </button>
             </div>
             <div class="col">
                 <progress id="loaded-features" style="width: 100%;" max="100" value="0"></progress>
