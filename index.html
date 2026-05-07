@@ -37,15 +37,15 @@
                 <label for="select-gages">Gages</label> (ignores stream order)
             </div>
             <div class="col">
-                <input type="radio" name="series" id="series-q" value="q" onchange="syncViews();">
+                <input type="radio" name="series" id="series-q" value="q" onchange="syncViews(); syncPlot();">
                 <label for="series-q">Discharge</label>
-                <input type="radio" name="series" id="series-uq" value="uq" checked onchange="syncViews();">
+                <input type="radio" name="series" id="series-uq" value="uq" checked onchange="syncViews(); syncPlot();">
                 <label for="series-uq">Unit Discharge</label>
             </div>
         </div>
         <div class="row">
             <div class="col">
-                <button id="btn-sync" class="btn btn-primary" onclick="syncPlot();">Load</button>
+                <button id="btn-sync" class="btn btn-primary" onclick="fullLoadPlot();">Load</button>
             </div>
             <div class="col">
                 <progress id="loaded-features" style="width: 100%;" max="100" value="0"></progress>
@@ -80,6 +80,8 @@
     let loadingFeatures = 0;
     let selectedFeatureIds = [];
     let hoverFeatureId = 0;
+
+    let last_data;
 
     const fetchOptions = { cache: 'no-cache' };
     const storeOptions = { overrides: fetchOptions };
@@ -212,41 +214,63 @@
         await warmUpModelMetadata(model);
         const modelinfo = models[model];
 
-        let features, getName, getReachId, getNameShort, getOrder;
+        let features, getName, getReachId, getNameShort, getOrder, fids;
+        let uqs;
         let maxFeatures = opts.maxFeatures || 50;
         let orderMin = opts.orderMin;
         let orderMax = opts.orderMax;
-        if(opts.select == 'reaches'){
-            //features = nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).sort((a,b) => b.get('order') - a.get('order')).slice(0,maxFeatures);
-            features = nonlocals.nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).filter(f => f.get('order') >= orderMin && f.get('order') <= orderMax);
-            features = shuffle(features).slice(0,maxFeatures).sort((a,b) => b.get('order') - a.get('order'));
-            features.forEach(f => f.getPropertiesInternal()['selected'] = true);
-            getReachId = function(f){ return f.getId(); }
-            getName = function(f){ return `${f.getId()}-${f.get('order')}`; }
-            getNameShort = getName;
-            getOrder = (f) => f.get('order');
-        } else if(opts.select == 'gages'){
-            features = shuffle(nonlocals.gageLayer.getSource().getFeaturesInExtent(map.getView().calculateExtent())).slice(0,maxFeatures);
-            getReachId = function(f){ return f.get('feature_id'); }
-            getName = function(f){ return `${f.get('site_name')}`; }
-            getNameShort = (f) => getName(f).slice(0,20);
-            getOrder = () => '-';
-        } else if(opts.select == 'huc'){
-            //TODO: Filter by HUC shape first using Turf.js
-            features = nonlocals.nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).sort((a,b) => b.get('order') - a.get('order')).slice(0,maxFeatures);
-            getReachId = function(f){ return f.getId(); }
-            getName = function(f){ return `${f.getId()}-${f.get('order')}`}
-            getNameShort = getName;
-            getOrder = (f) => f.get('order');
+        if(!last_data){
+            if(opts.select == 'reaches'){
+                //features = nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).sort((a,b) => b.get('order') - a.get('order')).slice(0,maxFeatures);
+                features = nonlocals.nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).filter(f => f.get('order') >= orderMin && f.get('order') <= orderMax);
+                features = shuffle(features).slice(0,maxFeatures).sort((a,b) => b.get('order') - a.get('order'));
+                features.forEach(f => f.getPropertiesInternal()['selected'] = true);
+                getReachId = function(f){ return f.getId(); }
+                getName = function(f){ return `${f.getId()}-${f.get('order')}`; }
+                getNameShort = getName;
+                getOrder = (f) => f.get('order');
+            } else if(opts.select == 'gages'){
+                features = shuffle(nonlocals.gageLayer.getSource().getFeaturesInExtent(map.getView().calculateExtent())).slice(0,maxFeatures);
+                getReachId = function(f){ return f.get('feature_id'); }
+                getName = function(f){ return `${f.get('site_name')}`; }
+                getNameShort = (f) => getName(f).slice(0,20);
+                getOrder = () => '-';
+            } else if(opts.select == 'huc'){
+                //TODO: Filter by HUC shape first using Turf.js
+                features = nonlocals.nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).sort((a,b) => b.get('order') - a.get('order')).slice(0,maxFeatures);
+                getReachId = function(f){ return f.getId(); }
+                getName = function(f){ return `${f.getId()}-${f.get('order')}`}
+                getNameShort = getName;
+                getOrder = (f) => f.get('order');
+            }
+            fids = features.map(getReachId);
+            selectedFeatureIds = fids;
+            loadingFeatures = fids.length;
+            loadedFeatures = 0;
+            updateFeaturesLoaded(0);
+            updateNwmLayerStyle(nonlocals.nwmLayer);
+
+            let promises = fids.map(f_id => seriesForReach(f_id, opts));
+            uqs = await Promise.all(promises);
+            last_data = {
+                uqs: uqs,
+                features: features,
+                fids: fids,
+                getNameShort: getNameShort,
+                getName: getName,
+                getOrder: getOrder,
+                getReachId: getReachId
+            };
+            window.last_data = last_data;
+        } else {
+            uqs = last_data.uqs;
+            features = last_data.features;
+            fids = last_data.fids;
+            getNameShort = last_data.getNameShort;
+            getName = last_data.getName;
+            getOrder = last_data.getOrder;
+            getReachId = last_data.getReachId;
         }
-
-
-        let fids = features.map(getReachId);
-        selectedFeatureIds = fids;
-        loadingFeatures = fids.length;
-        loadedFeatures = 0;
-        updateFeaturesLoaded(0);
-        updateNwmLayerStyle(nonlocals.nwmLayer);
 
         let layout = {
             title: {text:'Local Unit Normalized Composite Hydrograph'},
@@ -301,8 +325,7 @@
             9: 'rgba(0,0,191,0.5)',
             10: 'rgba(95,0,191,0.5)'
         };
-        let promises = fids.map(f_id => seriesForReach(f_id, opts));
-        let uqs = await Promise.all(promises);
+
         let max = 0;
         let traces = uqs.map((t,i) => {
             if(opts.series != 'q'){
@@ -502,6 +525,11 @@
         loadPlot(opts);
     }
 
+    function fullLoadPlot(){
+        last_data = false;
+        syncPlot();
+    }
+
     function updateFeaturesLoaded(addLoaded){
         loadedFeatures += addLoaded;
         let el = document.getElementById('loaded-features');
@@ -536,6 +564,7 @@
     window.seriesForReach = seriesForReach;
     window.syncViews = syncViews;
     window.syncPlot = syncPlot;
+    window.fullLoadPlot = fullLoadPlot;
     window.populateModelSelect = populateModelSelect;
 
 </script>
