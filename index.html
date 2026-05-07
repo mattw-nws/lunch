@@ -167,8 +167,14 @@
             updateFeaturesLoaded(1); //TODO: Move to wrapper/separate view and business logic concerns?
             return {'q': Array(samples).fill(NaN), 'uq': Array(samples).fill(NaN), 'da': NaN};
         }
-        let za_flow = await zarr.open(root.resolve('streamflow'), {kind:'array'});
-        let flow = await zarr.get(za_flow, [zarr.slice(0,samples), idx]);
+        let flow;
+        if(za_flow.shape.length == 2){ // time, feature_id
+            flow = await zarr.get(za_flow, [zarr.slice(0,samples), idx]);
+        } else if(za_flow.shape.length == 3){ // time, reference_time, feature_id
+            flow = await zarr.get(za_flow, [zarr.slice(0,samples), null, idx]);
+        } else {
+            throw new Error(`Unexpected number of dimensions: ${za_flow.shape.length}!`)
+        }
         flow = new Float32Array(flow.data);
         
         // const digits = 9;
