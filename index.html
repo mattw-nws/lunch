@@ -78,7 +78,10 @@
                 </button>
             </div>
             <div class="col">
-                <progress id="loaded-features" style="width: 100%;" max="100" value="0"></progress>
+                <div class="progress">
+                    <div id="loaded-features" class="progress-bar" role="progressbar" style="width: 0%;" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">25%</div>
+                </div>
+                <!-- <progress id="loaded-features" style="width: 100%;" max="100" value="0"></progress> -->
             </div>
         </div>
         <div class="row">
@@ -612,8 +615,17 @@
     function updateFeaturesLoaded(addLoaded){
         loadedFeatures += addLoaded;
         let el = document.getElementById('loaded-features');
-        el.max = loadingFeatures;
-        el.value = loadedFeatures;
+        let max = loadingFeatures;
+        let value = loadedFeatures;
+        el.style.width = `${100*value/max}%`;
+        el.setAttribute('aria-valuenow', value);
+        el.setAttribute('aria-valuemax', max);
+        el.innerText = `${value} / ${max}`;
+        if(value != max){
+            el.className += ' progress-bar-striped progress-bar-animated';
+        } else {
+            el.className = el.className.replace(/progress-bar-(striped|animated)/g,'');
+        }
     }
 
 
