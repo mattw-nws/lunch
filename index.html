@@ -20,6 +20,10 @@
         <div class="row">
             <div class="col align-items-center">
                 <div class="form-check form-check-inline">
+                    <input type="radio" class="form-check-input" name="select" id="select-none" value="none" checked onchange="syncViews();">
+                    <label class="form-check-label" for="select-none">None</label>
+                </div>
+                <div class="form-check form-check-inline">
                     <input type="radio" class="form-check-input" name="select" id="select-reaches" value="reaches" checked onchange="syncViews();">
                     <label class="form-check-label" for="select-reaches">Reaches</label>
                 </div>
@@ -122,7 +126,8 @@
 
     let nonlocals = {
         nwmLayer: null,
-        gageLayer: null
+        gageLayer: null,
+        loadButton: null,
     }
 
     // // Get drainage area values
@@ -592,6 +597,13 @@
         } else {
             orderSlider.noUiSlider.disable();
         }
+        if(nonlocals.loadButton){
+            if(opts.select == 'none'){
+                nonlocals.loadButton.disabled = true;
+            } else {
+                nonlocals.loadButton.disabled = false;
+            }
+        }
     }
 
     /**
@@ -659,6 +671,7 @@
     let opts = getOpts();
     nonlocals.nwmLayer = getReachesLayer(reaches_config);
     nonlocals.gageLayer = getGagesLayer(gages_config);
+    nonlocals.loadButton = document.getElementById('btn-sync');
     map.addLayer(nonlocals.nwmLayer);
     map.addLayer(nonlocals.gageLayer);
     updateNwmLayerStyle(nonlocals.nwmLayer, opts);
