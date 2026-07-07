@@ -287,6 +287,7 @@
             fids = features.map(getReachId);
             selectedFeatureIds = fids;
             updateNwmLayerStyle(nonlocals.nwmLayer, opts);
+            updateGageLayerStyle(nonlocals.gageLayer, opts);
 
             last_data = {
                 uqs: false, // This will force loading data when features change
@@ -561,10 +562,31 @@
         ]);
     }
 
+    function updateGageLayerStyle(gageLayer, opts){
+        let opacity = 0.1, gagesSelected = false;
+        try {
+            gagesSelected = opts['select'] == 'gages';
+            if(gagesSelected)
+                opacity = 1.0;
+        } catch {
+            // do nothing
+        }
+        gageLayer.setStyle(
+            {
+                "circle-radius": ["interpolate", ["linear"], ["resolution"], 500, 4, 5000, 1],
+                "circle-fill-color": [0,255,0,opacity],
+                "circle-stroke-color": [0,127,0,opacity],
+                "circle-stroke-width": 1
+            }
+        );
+    }
+
     function syncViews(){
         let opts = getOpts();
         if(nonlocals.nwmLayer)
             updateNwmLayerStyle(nonlocals.nwmLayer, opts);
+        if(nonlocals.gageLayer)
+            updateGageLayerStyle(nonlocals.gageLayer, opts);
         if(opts.select == 'reaches'){
             orderSlider.noUiSlider.enable();
         } else {
@@ -640,6 +662,7 @@
     map.addLayer(nonlocals.nwmLayer);
     map.addLayer(nonlocals.gageLayer);
     updateNwmLayerStyle(nonlocals.nwmLayer, opts);
+    updateGageLayerStyle(nonlocals.gageLayer, opts);
     let modeldefs = await fetch(new URL('config/model_defs.json', window.location), fetchOptions);
     let modeldefsjson = await modeldefs.json();
     models = modeldefsjson;
