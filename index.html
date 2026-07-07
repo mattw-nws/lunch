@@ -498,7 +498,7 @@
 
     let orderSlider = document.getElementById('order-slider');
 
-    const intformatter = (x => Math.floor(x))
+    const intformatter = (x => Math.round(x))
     noUiSlider.create(orderSlider, {
         start: [1, 9],
         connect: true,
