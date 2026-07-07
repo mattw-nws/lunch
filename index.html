@@ -538,6 +538,7 @@
         } catch {
             // do nothing
         }
+        const resAdjWidth = ['*',["get","order"], ["interpolate", ["linear"], ["resolution"], 100, 0.7, 5000, 0.1]];
         nwmLayer.setStyle([
             {
                 filter: ["==",["id"],hoverFeatureId],
@@ -550,8 +551,8 @@
                 else: true,
                 filter: ["in",["id"],selectedFeatureIds],
                 style: {
-                    "stroke-color": [0,191,191,1.0],
-                    "stroke-width": 12
+                    "stroke-color": [0,223,223,1.0],
+                    "stroke-width": ['clamp', ['*',1.5,resAdjWidth], 6, 12]
                 }
             },
             {
@@ -561,7 +562,7 @@
                         ["all",[">=",["get","order"],orderMin],["<=",["get","order"],orderMax]], [0,0,191, 0.5],
                         [0,0,191,0.1]
                     ],
-                    "stroke-width": ['*',["get","order"], ["interpolate", ["linear"], ["resolution"], 100, 0.7, 5000, 0.1]]
+                    "stroke-width": resAdjWidth
                 }
             }
         ]);
