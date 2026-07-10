@@ -683,8 +683,8 @@
         let opts = {model: 'mrnbm', steps: 18};
         opts['model'] = document.querySelector(`select[name="model"]`).value;
         opts['maxFeatures'] = document.querySelector(`input[name="max-features"]`).value
-        opts['orderMin'] = orderSlider.noUiSlider.get(true)[0];
-        opts['orderMax'] = orderSlider.noUiSlider.get(true)[1];
+        opts['orderMin'] = Math.round(orderSlider.noUiSlider.get(true)[0]);
+        opts['orderMax'] = Math.round(orderSlider.noUiSlider.get(true)[1]);
         opts['select'] = document.querySelector(`input[name="select"]:checked`).value;
         opts['series'] = document.querySelector(`input[name="series"]:checked`).value;
         opts['yLog'] = document.querySelector(`input[name="ylog"]:checked`).value;
