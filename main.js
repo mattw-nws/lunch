@@ -1,669 +1,669 @@
-    import * as zarr from "https://cdn.jsdelivr.net/npm/zarrita@0.6.2/+esm";
-    //import * as Plotly from 'https://cdn.jsdelivr.net/npm/plotly.js-dist/+esm';
-    import "https://cdn.plot.ly/plotly-3.1.0.min.js"
+import * as zarr from "https://cdn.jsdelivr.net/npm/zarrita@0.6.2/+esm";
+//import * as Plotly from 'https://cdn.jsdelivr.net/npm/plotly.js-dist/+esm';
+import "https://cdn.plot.ly/plotly-3.1.0.min.js"
 
-    import { Map, View } from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/+esm';
-    import { transformExtent } from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/proj/+esm';
-    import { GeoJSON } from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/format/+esm';
-    import { Vector } from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/source/+esm';
-    import { Tile, VectorTile, Vector as VectorLayer } from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/layer/+esm';
-    //import WebGLVectorTileLayer from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/layer/WebGLVectorTile.js/+esm';
-    import { OSM } from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/source/+esm';
-    import { PMTilesVectorSource } from 'https://cdn.jsdelivr.net/npm/ol-pmtiles@2.0.2/+esm';
+import { Map, View } from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/+esm';
+import { transformExtent } from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/proj/+esm';
+import { GeoJSON } from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/format/+esm';
+import { Vector } from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/source/+esm';
+import { Tile, VectorTile, Vector as VectorLayer } from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/layer/+esm';
+//import WebGLVectorTileLayer from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/layer/WebGLVectorTile.js/+esm';
+import { OSM } from 'https://cdn.jsdelivr.net/npm/ol@10.6.1/source/+esm';
+import { PMTilesVectorSource } from 'https://cdn.jsdelivr.net/npm/ol-pmtiles@2.0.2/+esm';
 
-    const maxFeatures = 100;
-    let loadedFeatures = 0;
-    let loadingFeatures = 0;
-    let selectedFeatureIds = [];
-    let hoverFeatureId = 0;
+const maxFeatures = 100;
+let loadedFeatures = 0;
+let loadingFeatures = 0;
+let selectedFeatureIds = [];
+let hoverFeatureId = 0;
 
-    let last_data = false;
+let last_data = false;
 
-    const fetchOptions = { cache: 'no-cache' };
-    const storeOptions = { overrides: fetchOptions };
-    let models = {}
+const fetchOptions = { cache: 'no-cache' };
+const storeOptions = { overrides: fetchOptions };
+let models = {}
 
-    let nonlocals = {
-        nwmLayer: null,
-        gageLayer: null,
-        loadButton: null,
+let nonlocals = {
+    nwmLayer: null,
+    gageLayer: null,
+    loadButton: null,
+}
+
+let totda_all;
+
+async function warmUpModelMetadata(model){        
+    const modelinfo = models[model];
+    let store = modelinfo.store || (modelinfo.store = new zarr.FetchStore(new URL(modelinfo.storeUrl, window.location), storeOptions));
+    let root = modelinfo.root || (modelinfo.root = zarr.root(modelinfo.store));
+
+    let za_rt = await zarr.open(root.resolve('reference_time'), {kind:'array'});
+    let rt = await zarr.get(za_rt);
+    rt = new Date(Number(rt.data[0])*1000);
+    if(rt != modelinfo.ref_time){
+        modelinfo.times = null; // Necessary!
+        modelinfo.feature_ids = null; // Probably not necessary?
+    }
+    modelinfo.ref_time = rt;
+
+    let feature_ids = modelinfo.feature_ids;
+    if(!feature_ids){
+        let za_fids = await zarr.open(root.resolve('feature_id'), {kind:'array'});
+        feature_ids = await zarr.get(za_fids);
+        modelinfo.feature_ids = feature_ids;
+    }
+    let times = modelinfo.times;
+    if(!times){
+        let za_times = await zarr.open(root.resolve('time'), {kind:'array'});
+        let times = await zarr.get(za_times);
+        let dtimes = Array(times.data.length);
+        times.data.forEach((t,i) => {dtimes[i] = new Date(Number(t)*1000)});
+        times = dtimes;
+        modelinfo.times = times;
+    }
+    return;
+}
+
+//const f_id = 19406836;
+//const f_id = 22005076;
+async function seriesForReach(f_id, opts){
+    let model = opts.model;
+    let series_type = opts.series;
+    
+    const modelinfo = models[model]; 
+    let samples = modelinfo.steps;
+    let root = modelinfo.root;
+    let feature_ids = modelinfo.feature_ids;
+    let times = modelinfo.times;
+
+    const idx = feature_ids.data.indexOf(BigInt(f_id));
+    let za_flow = await zarr.open(root.resolve('streamflow'), {kind:'array'});
+    samples = Math.min(samples, za_flow.shape.at(-1));
+    if(idx == -1){
+        console.log(`ERROR: Feature ID ${f_id} not found in model ${model}`);
+        updateFeaturesLoaded(1); //TODO: Move to wrapper/separate view and business logic concerns?
+        return {'q': Array(samples).fill(NaN), 'uq': Array(samples).fill(NaN), 'da': NaN};
+    }
+    let flow;
+    if(za_flow.shape.length == 2){ // time, feature_id
+        flow = await zarr.get(za_flow, [zarr.slice(0,samples), idx]);
+    } else if(za_flow.shape.length == 3){ // time, reference_time, feature_id
+        flow = await zarr.get(za_flow, [zarr.slice(0,samples), null, idx]);
+    } else {
+        throw new Error(`Unexpected number of dimensions: ${za_flow.shape.length}!`)
+    }
+    flow = new Float32Array(flow.data);
+    
+    // const digits = 9;
+    // let address = f_id.toString().padStart(digits, '0').split('').map(x => parseInt(x));
+    // let ptr = jsbti;
+    // try {
+    //     address.forEach((d, i) => {ptr = ptr[d];});
+    //     //console.log(ptr);
+    // } catch(e) {
+    //     console.log(`ERROR: No drainage area for feature ${f_id}`);
+    //     ptr = 9999999999;
+    // }
+
+    const da_idx = da_feature_ids.data.indexOf(BigInt(f_id));
+    let drainsqkm;
+    if(da_idx == -1){
+        console.log(`ERROR: No drainage area for feature ${f_id}`);
+        drainsqkm = 9999999999;
+    } else {
+        // const da_idx = da_feature_ids.data.indexOf(BigInt(f_id));
+        // let za_totda = await zarr.open(daroot.resolve('totda'), {kind: 'array'});
+        // let totda = await zarr.get(za_totda, [da_idx]);
+        // let da = Number(totda);
+        let da = Number(totda_all.data[da_idx]);
+        drainsqkm = da;
     }
 
-    let totda_all;
+    //console.log(f_id, ptr, drainsqkm)
+    //let drainsqkm = ptr;
 
-    async function warmUpModelMetadata(model){        
-        const modelinfo = models[model];
-        let store = modelinfo.store || (modelinfo.store = new zarr.FetchStore(new URL(modelinfo.storeUrl, window.location), storeOptions));
-        let root = modelinfo.root || (modelinfo.root = zarr.root(modelinfo.store));
+    // console.log(`q: ${flow[0]}; drainsqkm: ${drainsqkm}; (f*35.31467): ${(flow[0]*35.31467)}; (drainsqkm*0.386102): ${(drainsqkm*0.386102)}; uq: ${(flow[0]*35.31467)/(drainsqkm*0.386102)} )`);
+    let q = flow.map(q => q*35.31467); // flow remains in metric if we want it later!
+    let uq = q.map(q => q/(drainsqkm*0.386102));
+    updateFeaturesLoaded(1); //TODO: Move to wrapper/separate view and business logic concerns?
+    return {'q': q, 'uq': uq, 'da': drainsqkm};
+}
 
-        let za_rt = await zarr.open(root.resolve('reference_time'), {kind:'array'});
-        let rt = await zarr.get(za_rt);
-        rt = new Date(Number(rt.data[0])*1000);
-        if(rt != modelinfo.ref_time){
-            modelinfo.times = null; // Necessary!
-            modelinfo.feature_ids = null; // Probably not necessary?
-        }
-        modelinfo.ref_time = rt;
 
-        let feature_ids = modelinfo.feature_ids;
-        if(!feature_ids){
-            let za_fids = await zarr.open(root.resolve('feature_id'), {kind:'array'});
-            feature_ids = await zarr.get(za_fids);
-            modelinfo.feature_ids = feature_ids;
+// from https://www.30secondsofcode.org/js/s/array-sample-shuffle-weighted-selection/
+function shuffle([...arr]){
+    let m = arr.length;
+    while (m) {
+        const i = Math.floor(Math.random() * m--);
+        [arr[m], arr[i]] = [arr[i], arr[m]];
+    }
+    return arr;
+};
+
+
+//document.getElementById('btn-sync').on('click', async function(evt){
+async function loadPlot(opts){
+    const model = opts.model;
+    await warmUpModelMetadata(model);
+    const modelinfo = models[model];
+
+    let features, getName, getReachId, getNameShort, getOrder, fids;
+    let uqs;
+    let maxFeatures = opts.maxFeatures || 50;
+    let orderMin = opts.orderMin;
+    let orderMax = opts.orderMax;
+    if(!last_data['features']){
+        if(opts.select == 'reaches'){
+            //features = nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).sort((a,b) => b.get('order') - a.get('order')).slice(0,maxFeatures);
+            features = nonlocals.nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).filter(f => f.get('order') >= orderMin && f.get('order') <= orderMax);
+            features = shuffle(features).slice(0,maxFeatures).sort((a,b) => b.get('order') - a.get('order'));
+            features.forEach(f => f.getPropertiesInternal()['selected'] = true);
+            getReachId = function(f){ return f.getId(); }
+            getName = function(f){ return `${f.getId()}-${f.get('order')}`; }
+            getNameShort = getName;
+            getOrder = (f) => f.get('order');
+        } else if(opts.select == 'gages'){
+            features = shuffle(nonlocals.gageLayer.getSource().getFeaturesInExtent(map.getView().calculateExtent())).slice(0,maxFeatures);
+            getReachId = function(f){ return f.get('feature_id'); }
+            getName = function(f){ return `${f.get('site_name')}`; }
+            getNameShort = (f) => getName(f).slice(0,20);
+            getOrder = () => '-';
+        } else if(opts.select == 'huc'){
+            //TODO: Filter by HUC shape first using Turf.js
+            features = nonlocals.nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).sort((a,b) => b.get('order') - a.get('order')).slice(0,maxFeatures);
+            getReachId = function(f){ return f.getId(); }
+            getName = function(f){ return `${f.getId()}-${f.get('order')}`}
+            getNameShort = getName;
+            getOrder = (f) => f.get('order');
         }
-        let times = modelinfo.times;
-        if(!times){
-            let za_times = await zarr.open(root.resolve('time'), {kind:'array'});
-            let times = await zarr.get(za_times);
-            let dtimes = Array(times.data.length);
-            times.data.forEach((t,i) => {dtimes[i] = new Date(Number(t)*1000)});
-            times = dtimes;
-            modelinfo.times = times;
+        fids = features.map(getReachId);
+        selectedFeatureIds = fids;
+        updateNwmLayerStyle(nonlocals.nwmLayer, opts);
+        updateGageLayerStyle(nonlocals.gageLayer, opts);
+
+        last_data = {
+            uqs: false, // This will force loading data when features change
+            features: features,
+            fids: fids,
+            getNameShort: getNameShort,
+            getName: getName,
+            getOrder: getOrder,
+            getReachId: getReachId
+        };
+        window.last_data = last_data;
+    } else {
+        // uqs = last_data.uqs;
+        features = last_data.features;
+        fids = last_data.fids;
+        getNameShort = last_data.getNameShort;
+        getName = last_data.getName;
+        getOrder = last_data.getOrder;
+        getReachId = last_data.getReachId;
+    }
+    if(!last_data['uqs']){
+        loadingFeatures = fids.length;
+        loadedFeatures = 0;
+        updateFeaturesLoaded(0);
+        let promises = fids.map(f_id => seriesForReach(f_id, opts));
+        uqs = await Promise.all(promises);
+        last_data['uqs'] = uqs;
+    } else {
+        uqs = last_data.uqs
+    }
+
+    let layout = {
+        title: {text:'Local Unit Normalized Composite Hydrograph'},
+        margin: {
+            l: 50, r: 20, b: 50, t: 50
+        },
+        xaxis: { title: {text: 'Time' }},
+        annotations: [
+            {
+                text: `${modelinfo.name} - init time ${modelinfo.ref_time.toISOString().replace(/(\d)T(\d)/, '$1 $2').replace(/:00.000Z/,'Z')}`,
+                showarrow: false,
+                font: {
+                    size: 10,
+                    color: 'gray'
+                },
+                xref: 'paper',
+                yref: 'paper',
+                xanchor: 'bottom',
+                yanchor: 'left',
+                x: -0.07,
+                y: -0.08
+            }
+        ]
+    };
+
+    let hovertemplate;
+    if(opts.series == 'q'){
+        layout.yaxis = { title: {text: 'Q (cfs)'}}
+        hovertemplate = '<b>%{meta[0]}</b><br>'
+            + '<b>Q:</b> %{y:.2f} (cfs)<br>'
+            + '<b>UQ:</b> %{customdata:.2f} (cfs/sqmi)<br>'
+            + '<b>Stream Order:</b> %{meta[1]}<br>'
+            + '<b>Total Drainage Area:</b> %{meta[2]:.2f} sqmi<extra></extra>';
+    } else {
+        layout.yaxis = { title: {text: 'UQ (cfs/sqmi)'}}
+        hovertemplate = '<b>%{meta[0]}</b><br>'
+            + '<b>UQ:</b> %{y:.2f} (cfs/sqmi)<br>'
+            + '<b>Q:</b> %{customdata:.2f} (cfs)<br>'
+            + '<b>Stream Order:</b> %{meta[1]}<br>'
+            + '<b>Total Drainage Area:</b> %{meta[2]:.2f} sqmi<extra></extra>';
+    }
+    layout.yaxis['type'] = opts.yLog;
+
+    const orderColors = {
+        1: 'rgba(191,0,0,0.5)',
+        2: 'rgba(191,95,0,0.5)',
+        3: 'rgba(191,191,0,0.5)',
+        4: 'rgba(95,191,0,0.5)',
+        5: 'rgba(0,191,0,0.5)',
+        6: 'rgba(0,191,95,0.5)',
+        7: 'rgba(0,191,191,0.5)',
+        8: 'rgba(0,95,191,0.5)',
+        9: 'rgba(0,0,191,0.5)',
+        10: 'rgba(95,0,191,0.5)'
+    };
+
+    let max = 0;
+    let traces = uqs.map((t,i) => {
+        if(opts.series != 'q'){
+            max = Math.max(max, Math.max(...t.uq) || max); // the || catches NaN returns from trace max
         }
+        return {
+            x: modelinfo.times, 
+            y: (opts.series == 'q' ? t.q : t.uq),
+            customdata: (opts.series == 'q' ? t.uq : t.q),
+            mode: 'lines', 
+            name: getNameShort(features[i]),
+            featureId: fids[i],
+            meta: [getName(features[i]), getOrder(features[i]), (t.da*0.386102)],
+            hovertemplate: hovertemplate,
+            legendgroup: (opts.select == 'reaches' ? String(getOrder(features[i])) : undefined),
+            legendgrouptitle: (opts.select == 'reaches' ? {text: `<b>Order ${getOrder(features[i])}</b>`} : undefined),
+            line: {
+                color: orderColors[getOrder(features[i])],
+                width: 0.8,
+                opacity: 0.2
+            }
+        };
+    });
+
+    if(false && opts.series != 'q'){
+        const flashes = [
+            [10, 20, [255,255,0]],
+            [20, 40, [238,118,19]],
+            [40, 60, [234,61,61]],
+            [60, 100, [247,51,182]],
+            [100, 120, [[35,47,241]]]
+        ]
+        let fill = undefined;
+        if(max >= flashes[0][0]) for(let flash of flashes){
+            if(max > flash[0]){
+                traces.unshift({
+                    x: [modelinfo.times[0], modelinfo.times[modelinfo.times.length - 1]],
+                    y: [flash[0], flash[0]],
+                    mode: 'lines',
+                    type: "scatter",
+                    fill: fill,
+                    fillcolor: `rgba(${flash[2][0]},${flash[2][1]},${flash[2][2]},0.2)`,
+                    line: { color: 'rgba(0,0,0,0)' },
+                    legendgroup: 'FLASH',
+                    legendgrouptitle: {text: "<b>FLASH Thresholds</b>"}
+                });
+                fill = 'tonexty';
+            } else {
+                traces.unshift({
+                    x: [modelinfo.times[0], modelinfo.times[modelinfo.times.length - 1]],
+                    y: [flash[0], flash[0]],
+                    mode: 'lines',
+                    type: "scatter",
+                    fill: fill,
+                    fillcolor: `rgba(${flash[2][0]},${flash[2][1]},${flash[2][2]},0.2)`,
+                    line: { color: 'rgba(0,0,0,0)' },
+                    legendgroup: 'FLASH',
+                    legendgrouptitle: {text: "<b>FLASH Thresholds</b>"}
+                });
+                break;
+            }
+        }
+    }
+
+    const plotDiv = document.getElementById('hydrograph');
+    let plot = Plotly.newPlot(plotDiv, traces, layout);
+    plotDiv.on('plotly_hover', function(data){
+        if (data.points && data.points.length > 0) {
+            hoverFeatureId = data.points[0].data.featureId;
+            let opts = getOpts();
+            updateNwmLayerStyle(nonlocals.nwmLayer, opts);
+        }
+    })
+};
+
+
+// MAP
+
+function getReachesLayer(reaches_config){
+    return new VectorTile({
+        source: new PMTilesVectorSource({
+            url: reaches_config.url,
+            attributions: reaches_config?.attributions || [],
+        }),
+        style: {
+            "stroke-color": [0,0,191,0.8],
+            "stroke-width": ['*',["get","order"],0.8]
+        }
+    });
+}
+
+function getGagesLayer(gages_config){
+    return new VectorLayer({
+        source: new Vector({
+            url: gages_config.url,
+            format: new GeoJSON(),
+            wrapX: true
+        }),
+        style: {
+            "circle-radius": ["interpolate", ["linear"], ["resolution"], 500, 4, 5000, 1],
+            "circle-fill-color": [0,255,0,1.0],
+            "circle-stroke-color": [0,127,0,1.0],
+            "circle-stroke-width": 1
+        }
+    });
+}
+
+const map = new Map({
+    target: "map",
+    layers: [
+        new Tile({
+        source: new OSM(),
+        visible: true,
+        })
+    ],
+    view: new View({
+        center: [-10822895.779350141, 4812162.860382532],
+        zoom: 4.3,
+    }),
+});
+
+// VIEW
+
+let orderSlider = document.getElementById('order-slider');
+
+const intformatter = (x => Math.round(x))
+noUiSlider.create(orderSlider, {
+    start: [1, 9],
+    connect: true,
+    tooltips: [{to: intformatter}, {to: intformatter}],
+    step: 1,
+    range: {
+        'min': 1,
+        'max': 10
+    }
+});
+orderSlider.noUiSlider.on('update', syncViews);
+
+function populateModelSelect(){
+    let select = document.querySelector(`select[name="model"]`);
+    for(let m in models){
+        let option = document.createElement('option');
+        option.value = m;
+        option.text = models[m].name;
+        select.appendChild(option);
+    }
+}
+
+function updateNwmLayerStyle(nwmLayer, opts){
+    let orderMin = 0, orderMax = 0, reachesSelected = false;
+    try {
+        reachesSelected = opts['select'] == 'reaches';
+        if(reachesSelected){
+            orderMin = opts['orderMin'];
+            orderMax = opts['orderMax'];
+        }
+    } catch {
+        // do nothing
+    }
+    const resAdjWidth = ['*',["get","order"], ["interpolate", ["linear"], ["resolution"], 100, 0.7, 5000, 0.1]];
+    nwmLayer.setStyle([
+        {
+            filter: ["==",["id"],hoverFeatureId],
+            style: {
+                "stroke-color": [255,255,0,1.0],
+                "stroke-width": 12
+            }
+        },
+        {
+            else: true,
+            filter: ["in",["id"],selectedFeatureIds],
+            style: {
+                "stroke-color": [0,223,223,1.0],
+                "stroke-width": ['clamp', ['*',1.5,resAdjWidth], 6, 12]
+            }
+        },
+        {
+            else: true,
+            style: {
+                "stroke-color": ["case",
+                    ["all",[">=",["get","order"],orderMin],["<=",["get","order"],orderMax]], [0,0,191, 0.5],
+                    [0,0,191,0.1]
+                ],
+                "stroke-width": resAdjWidth
+            }
+        }
+    ]);
+}
+
+function updateGageLayerStyle(gageLayer, opts){
+    let opacity = 0.1, gagesSelected = false;
+    try {
+        gagesSelected = opts['select'] == 'gages';
+        if(gagesSelected)
+            opacity = 1.0;
+    } catch {
+        // do nothing
+    }
+    gageLayer.setStyle(
+        {
+            "circle-radius": ["interpolate", ["linear"], ["resolution"], 500, 4, 5000, 1],
+            "circle-fill-color": [0,255,0,opacity],
+            "circle-stroke-color": [0,127,0,opacity],
+            "circle-stroke-width": 1
+        }
+    );
+}
+
+async function syncAnchor(){
+    /* Example anchor JSON payload:
+        {
+        "bbox": [-110.0,34.0,-111.0,35.0],
+        "model": "sr",
+        "feature_type": "reaches",
+        "max_features": 1000,
+        "stream_order": [1,3],
+        "series": "uq",
+        "ylog": false,
+        "load": true
+        }
+    */
+    const hash = window.location.hash;
+    if (!hash || hash.length <= 1) return;
+
+    let payload;
+    try {
+        payload = JSON.parse(decodeURIComponent(hash.slice(1)));
+    } catch(e) {
+        console.error('syncAnchor: failed to parse anchor JSON payload:', e);
         return;
     }
 
-    //const f_id = 19406836;
-    //const f_id = 22005076;
-    async function seriesForReach(f_id, opts){
-        let model = opts.model;
-        let series_type = opts.series;
-        
-        const modelinfo = models[model]; 
-        let samples = modelinfo.steps;
-        let root = modelinfo.root;
-        let feature_ids = modelinfo.feature_ids;
-        let times = modelinfo.times;
-
-        const idx = feature_ids.data.indexOf(BigInt(f_id));
-        let za_flow = await zarr.open(root.resolve('streamflow'), {kind:'array'});
-        samples = Math.min(samples, za_flow.shape.at(-1));
-        if(idx == -1){
-            console.log(`ERROR: Feature ID ${f_id} not found in model ${model}`);
-            updateFeaturesLoaded(1); //TODO: Move to wrapper/separate view and business logic concerns?
-            return {'q': Array(samples).fill(NaN), 'uq': Array(samples).fill(NaN), 'da': NaN};
-        }
-        let flow;
-        if(za_flow.shape.length == 2){ // time, feature_id
-            flow = await zarr.get(za_flow, [zarr.slice(0,samples), idx]);
-        } else if(za_flow.shape.length == 3){ // time, reference_time, feature_id
-            flow = await zarr.get(za_flow, [zarr.slice(0,samples), null, idx]);
-        } else {
-            throw new Error(`Unexpected number of dimensions: ${za_flow.shape.length}!`)
-        }
-        flow = new Float32Array(flow.data);
-        
-        // const digits = 9;
-        // let address = f_id.toString().padStart(digits, '0').split('').map(x => parseInt(x));
-        // let ptr = jsbti;
-        // try {
-        //     address.forEach((d, i) => {ptr = ptr[d];});
-        //     //console.log(ptr);
-        // } catch(e) {
-        //     console.log(`ERROR: No drainage area for feature ${f_id}`);
-        //     ptr = 9999999999;
-        // }
-
-        const da_idx = da_feature_ids.data.indexOf(BigInt(f_id));
-        let drainsqkm;
-        if(da_idx == -1){
-            console.log(`ERROR: No drainage area for feature ${f_id}`);
-            drainsqkm = 9999999999;
-        } else {
-            // const da_idx = da_feature_ids.data.indexOf(BigInt(f_id));
-            // let za_totda = await zarr.open(daroot.resolve('totda'), {kind: 'array'});
-            // let totda = await zarr.get(za_totda, [da_idx]);
-            // let da = Number(totda);
-            let da = Number(totda_all.data[da_idx]);
-            drainsqkm = da;
-        }
-
-        //console.log(f_id, ptr, drainsqkm)
-        //let drainsqkm = ptr;
-
-        // console.log(`q: ${flow[0]}; drainsqkm: ${drainsqkm}; (f*35.31467): ${(flow[0]*35.31467)}; (drainsqkm*0.386102): ${(drainsqkm*0.386102)}; uq: ${(flow[0]*35.31467)/(drainsqkm*0.386102)} )`);
-        let q = flow.map(q => q*35.31467); // flow remains in metric if we want it later!
-        let uq = q.map(q => q/(drainsqkm*0.386102));
-        updateFeaturesLoaded(1); //TODO: Move to wrapper/separate view and business logic concerns?
-        return {'q': q, 'uq': uq, 'da': drainsqkm};
+    // Update DOM UI elements
+    if (payload.model !== undefined) {
+        document.querySelector('select[name="model"]').value = payload.model;
+    }
+    if (payload.feature_type !== undefined) {
+        const radio = document.querySelector(`input[name="select"][value="${payload.feature_type}"]`);
+        if (radio) radio.checked = true;
+    }
+    if (payload.max_features !== undefined) {
+        document.querySelector('input[name="max-features"]').value = payload.max_features;
+    }
+    if (payload.stream_order !== undefined) {
+        orderSlider.noUiSlider.set(payload.stream_order);
+    }
+    if (payload.series !== undefined) {
+        const radio = document.querySelector(`input[name="series"][value="${payload.series}"]`);
+        if (radio) radio.checked = true;
+    }
+    if (payload.ylog !== undefined) {
+        const ylogValue = typeof payload.ylog === 'boolean'
+            ? (payload.ylog ? 'log' : 'linear')
+            : payload.ylog;
+        const radio = document.querySelector(`input[name="ylog"][value="${ylogValue}"]`);
+        if (radio) radio.checked = true;
     }
 
-
-    // from https://www.30secondsofcode.org/js/s/array-sample-shuffle-weighted-selection/
-    function shuffle([...arr]){
-        let m = arr.length;
-        while (m) {
-            const i = Math.floor(Math.random() * m--);
-            [arr[m], arr[i]] = [arr[i], arr[m]];
-        }
-        return arr;
-    };
-
-
-    //document.getElementById('btn-sync').on('click', async function(evt){
-    async function loadPlot(opts){
-        const model = opts.model;
-        await warmUpModelMetadata(model);
-        const modelinfo = models[model];
-
-        let features, getName, getReachId, getNameShort, getOrder, fids;
-        let uqs;
-        let maxFeatures = opts.maxFeatures || 50;
-        let orderMin = opts.orderMin;
-        let orderMax = opts.orderMax;
-        if(!last_data['features']){
-            if(opts.select == 'reaches'){
-                //features = nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).sort((a,b) => b.get('order') - a.get('order')).slice(0,maxFeatures);
-                features = nonlocals.nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).filter(f => f.get('order') >= orderMin && f.get('order') <= orderMax);
-                features = shuffle(features).slice(0,maxFeatures).sort((a,b) => b.get('order') - a.get('order'));
-                features.forEach(f => f.getPropertiesInternal()['selected'] = true);
-                getReachId = function(f){ return f.getId(); }
-                getName = function(f){ return `${f.getId()}-${f.get('order')}`; }
-                getNameShort = getName;
-                getOrder = (f) => f.get('order');
-            } else if(opts.select == 'gages'){
-                features = shuffle(nonlocals.gageLayer.getSource().getFeaturesInExtent(map.getView().calculateExtent())).slice(0,maxFeatures);
-                getReachId = function(f){ return f.get('feature_id'); }
-                getName = function(f){ return `${f.get('site_name')}`; }
-                getNameShort = (f) => getName(f).slice(0,20);
-                getOrder = () => '-';
-            } else if(opts.select == 'huc'){
-                //TODO: Filter by HUC shape first using Turf.js
-                features = nonlocals.nwmLayer.getFeaturesInExtent(map.getView().calculateExtent()).sort((a,b) => b.get('order') - a.get('order')).slice(0,maxFeatures);
-                getReachId = function(f){ return f.getId(); }
-                getName = function(f){ return `${f.getId()}-${f.get('order')}`}
-                getNameShort = getName;
-                getOrder = (f) => f.get('order');
-            }
-            fids = features.map(getReachId);
-            selectedFeatureIds = fids;
-            updateNwmLayerStyle(nonlocals.nwmLayer, opts);
-            updateGageLayerStyle(nonlocals.gageLayer, opts);
-
-            last_data = {
-                uqs: false, // This will force loading data when features change
-                features: features,
-                fids: fids,
-                getNameShort: getNameShort,
-                getName: getName,
-                getOrder: getOrder,
-                getReachId: getReachId
-            };
-            window.last_data = last_data;
-        } else {
-            // uqs = last_data.uqs;
-            features = last_data.features;
-            fids = last_data.fids;
-            getNameShort = last_data.getNameShort;
-            getName = last_data.getName;
-            getOrder = last_data.getOrder;
-            getReachId = last_data.getReachId;
-        }
-        if(!last_data['uqs']){
-            loadingFeatures = fids.length;
-            loadedFeatures = 0;
-            updateFeaturesLoaded(0);
-            let promises = fids.map(f_id => seriesForReach(f_id, opts));
-            uqs = await Promise.all(promises);
-            last_data['uqs'] = uqs;
-        } else {
-            uqs = last_data.uqs
-        }
-
-        let layout = {
-            title: {text:'Local Unit Normalized Composite Hydrograph'},
-            margin: {
-                l: 50, r: 20, b: 50, t: 50
-            },
-            xaxis: { title: {text: 'Time' }},
-            annotations: [
-                {
-                    text: `${modelinfo.name} - init time ${modelinfo.ref_time.toISOString().replace(/(\d)T(\d)/, '$1 $2').replace(/:00.000Z/,'Z')}`,
-                    showarrow: false,
-                    font: {
-                        size: 10,
-                        color: 'gray'
-                    },
-                    xref: 'paper',
-                    yref: 'paper',
-                    xanchor: 'bottom',
-                    yanchor: 'left',
-                    x: -0.07,
-                    y: -0.08
-                }
-            ]
-        };
-
-        let hovertemplate;
-        if(opts.series == 'q'){
-            layout.yaxis = { title: {text: 'Q (cfs)'}}
-            hovertemplate = '<b>%{meta[0]}</b><br>'
-                + '<b>Q:</b> %{y:.2f} (cfs)<br>'
-                + '<b>UQ:</b> %{customdata:.2f} (cfs/sqmi)<br>'
-                + '<b>Stream Order:</b> %{meta[1]}<br>'
-                + '<b>Total Drainage Area:</b> %{meta[2]:.2f} sqmi<extra></extra>';
-        } else {
-            layout.yaxis = { title: {text: 'UQ (cfs/sqmi)'}}
-            hovertemplate = '<b>%{meta[0]}</b><br>'
-                + '<b>UQ:</b> %{y:.2f} (cfs/sqmi)<br>'
-                + '<b>Q:</b> %{customdata:.2f} (cfs)<br>'
-                + '<b>Stream Order:</b> %{meta[1]}<br>'
-                + '<b>Total Drainage Area:</b> %{meta[2]:.2f} sqmi<extra></extra>';
-        }
-        layout.yaxis['type'] = opts.yLog;
-
-        const orderColors = {
-            1: 'rgba(191,0,0,0.5)',
-            2: 'rgba(191,95,0,0.5)',
-            3: 'rgba(191,191,0,0.5)',
-            4: 'rgba(95,191,0,0.5)',
-            5: 'rgba(0,191,0,0.5)',
-            6: 'rgba(0,191,95,0.5)',
-            7: 'rgba(0,191,191,0.5)',
-            8: 'rgba(0,95,191,0.5)',
-            9: 'rgba(0,0,191,0.5)',
-            10: 'rgba(95,0,191,0.5)'
-        };
-
-        let max = 0;
-        let traces = uqs.map((t,i) => {
-            if(opts.series != 'q'){
-                max = Math.max(max, Math.max(...t.uq) || max); // the || catches NaN returns from trace max
-            }
-            return {
-                x: modelinfo.times, 
-                y: (opts.series == 'q' ? t.q : t.uq),
-                customdata: (opts.series == 'q' ? t.uq : t.q),
-                mode: 'lines', 
-                name: getNameShort(features[i]),
-                featureId: fids[i],
-                meta: [getName(features[i]), getOrder(features[i]), (t.da*0.386102)],
-                hovertemplate: hovertemplate,
-                legendgroup: (opts.select == 'reaches' ? String(getOrder(features[i])) : undefined),
-                legendgrouptitle: (opts.select == 'reaches' ? {text: `<b>Order ${getOrder(features[i])}</b>`} : undefined),
-                line: {
-                    color: orderColors[getOrder(features[i])],
-                    width: 0.8,
-                    opacity: 0.2
-                }
-            };
-        });
-
-        if(false && opts.series != 'q'){
-            const flashes = [
-                [10, 20, [255,255,0]],
-                [20, 40, [238,118,19]],
-                [40, 60, [234,61,61]],
-                [60, 100, [247,51,182]],
-                [100, 120, [[35,47,241]]]
-            ]
-            let fill = undefined;
-            if(max >= flashes[0][0]) for(let flash of flashes){
-                if(max > flash[0]){
-                    traces.unshift({
-                        x: [modelinfo.times[0], modelinfo.times[modelinfo.times.length - 1]],
-                        y: [flash[0], flash[0]],
-                        mode: 'lines',
-                        type: "scatter",
-                        fill: fill,
-                        fillcolor: `rgba(${flash[2][0]},${flash[2][1]},${flash[2][2]},0.2)`,
-                        line: { color: 'rgba(0,0,0,0)' },
-                        legendgroup: 'FLASH',
-                        legendgrouptitle: {text: "<b>FLASH Thresholds</b>"}
-                    });
-                    fill = 'tonexty';
-                } else {
-                    traces.unshift({
-                        x: [modelinfo.times[0], modelinfo.times[modelinfo.times.length - 1]],
-                        y: [flash[0], flash[0]],
-                        mode: 'lines',
-                        type: "scatter",
-                        fill: fill,
-                        fillcolor: `rgba(${flash[2][0]},${flash[2][1]},${flash[2][2]},0.2)`,
-                        line: { color: 'rgba(0,0,0,0)' },
-                        legendgroup: 'FLASH',
-                        legendgrouptitle: {text: "<b>FLASH Thresholds</b>"}
-                    });
-                    break;
-                }
-            }
-        }
-
-        const plotDiv = document.getElementById('hydrograph');
-        let plot = Plotly.newPlot(plotDiv, traces, layout);
-        plotDiv.on('plotly_hover', function(data){
-            if (data.points && data.points.length > 0) {
-                hoverFeatureId = data.points[0].data.featureId;
-                let opts = getOpts();
-                updateNwmLayerStyle(nonlocals.nwmLayer, opts);
-            }
-        })
-    };
-
-
-    // MAP
-
-    function getReachesLayer(reaches_config){
-        return new VectorTile({
-            source: new PMTilesVectorSource({
-                url: reaches_config.url,
-                attributions: reaches_config?.attributions || [],
-            }),
-            style: {
-                "stroke-color": [0,0,191,0.8],
-                "stroke-width": ['*',["get","order"],0.8]
-            }
-        });
+    // set map extent
+    if (payload.bbox !== undefined) {
+        const extent = transformExtent(payload.bbox, 'EPSG:4326', 'EPSG:3857');
+        map.getView().fit(extent, { size: map.getSize() });
     }
 
-    function getGagesLayer(gages_config){
-        return new VectorLayer({
-            source: new Vector({
-                url: gages_config.url,
-                format: new GeoJSON(),
-                wrapX: true
-            }),
-            style: {
-                "circle-radius": ["interpolate", ["linear"], ["resolution"], 500, 4, 5000, 1],
-                "circle-fill-color": [0,255,0,1.0],
-                "circle-stroke-color": [0,127,0,1.0],
-                "circle-stroke-width": 1
-            }
-        });
+    // Wait for features in the map to load
+    const renderDone = new Promise(resolve => map.once('rendercomplete', resolve));
+    map.render();
+    await renderDone;
+
+    syncViews();
+    syncPlot();
+    if (payload.load === true) {
+        fullLoadPlot();
     }
-    
-    const map = new Map({
-        target: "map",
-        layers: [
-            new Tile({
-            source: new OSM(),
-            visible: true,
-            })
-        ],
-        view: new View({
-            center: [-10822895.779350141, 4812162.860382532],
-            zoom: 4.3,
-        }),
-    });
+}
 
-    // VIEW
-
-    let orderSlider = document.getElementById('order-slider');
-
-    const intformatter = (x => Math.round(x))
-    noUiSlider.create(orderSlider, {
-        start: [1, 9],
-        connect: true,
-        tooltips: [{to: intformatter}, {to: intformatter}],
-        step: 1,
-        range: {
-            'min': 1,
-            'max': 10
-        }
-    });
-    orderSlider.noUiSlider.on('update', syncViews);
-
-    function populateModelSelect(){
-        let select = document.querySelector(`select[name="model"]`);
-        for(let m in models){
-            let option = document.createElement('option');
-            option.value = m;
-            option.text = models[m].name;
-            select.appendChild(option);
-        }
-    }
-
-    function updateNwmLayerStyle(nwmLayer, opts){
-        let orderMin = 0, orderMax = 0, reachesSelected = false;
-        try {
-            reachesSelected = opts['select'] == 'reaches';
-            if(reachesSelected){
-                orderMin = opts['orderMin'];
-                orderMax = opts['orderMax'];
-            }
-        } catch {
-            // do nothing
-        }
-        const resAdjWidth = ['*',["get","order"], ["interpolate", ["linear"], ["resolution"], 100, 0.7, 5000, 0.1]];
-        nwmLayer.setStyle([
-            {
-                filter: ["==",["id"],hoverFeatureId],
-                style: {
-                    "stroke-color": [255,255,0,1.0],
-                    "stroke-width": 12
-                }
-            },
-            {
-                else: true,
-                filter: ["in",["id"],selectedFeatureIds],
-                style: {
-                    "stroke-color": [0,223,223,1.0],
-                    "stroke-width": ['clamp', ['*',1.5,resAdjWidth], 6, 12]
-                }
-            },
-            {
-                else: true,
-                style: {
-                    "stroke-color": ["case",
-                        ["all",[">=",["get","order"],orderMin],["<=",["get","order"],orderMax]], [0,0,191, 0.5],
-                        [0,0,191,0.1]
-                    ],
-                    "stroke-width": resAdjWidth
-                }
-            }
-        ]);
-    }
-
-    function updateGageLayerStyle(gageLayer, opts){
-        let opacity = 0.1, gagesSelected = false;
-        try {
-            gagesSelected = opts['select'] == 'gages';
-            if(gagesSelected)
-                opacity = 1.0;
-        } catch {
-            // do nothing
-        }
-        gageLayer.setStyle(
-            {
-                "circle-radius": ["interpolate", ["linear"], ["resolution"], 500, 4, 5000, 1],
-                "circle-fill-color": [0,255,0,opacity],
-                "circle-stroke-color": [0,127,0,opacity],
-                "circle-stroke-width": 1
-            }
-        );
-    }
-
-    async function syncAnchor(){
-        /* Example anchor JSON payload:
-          {
-            "bbox": [-110.0,34.0,-111.0,35.0],
-            "model": "sr",
-            "feature_type": "reaches",
-            "max_features": 1000,
-            "stream_order": [1,3],
-            "series": "uq",
-            "ylog": false,
-            "load": true
-          }
-        */
-        const hash = window.location.hash;
-        if (!hash || hash.length <= 1) return;
-
-        let payload;
-        try {
-            payload = JSON.parse(decodeURIComponent(hash.slice(1)));
-        } catch(e) {
-            console.error('syncAnchor: failed to parse anchor JSON payload:', e);
-            return;
-        }
-
-        // Update DOM UI elements
-        if (payload.model !== undefined) {
-            document.querySelector('select[name="model"]').value = payload.model;
-        }
-        if (payload.feature_type !== undefined) {
-            const radio = document.querySelector(`input[name="select"][value="${payload.feature_type}"]`);
-            if (radio) radio.checked = true;
-        }
-        if (payload.max_features !== undefined) {
-            document.querySelector('input[name="max-features"]').value = payload.max_features;
-        }
-        if (payload.stream_order !== undefined) {
-            orderSlider.noUiSlider.set(payload.stream_order);
-        }
-        if (payload.series !== undefined) {
-            const radio = document.querySelector(`input[name="series"][value="${payload.series}"]`);
-            if (radio) radio.checked = true;
-        }
-        if (payload.ylog !== undefined) {
-            const ylogValue = typeof payload.ylog === 'boolean'
-                ? (payload.ylog ? 'log' : 'linear')
-                : payload.ylog;
-            const radio = document.querySelector(`input[name="ylog"][value="${ylogValue}"]`);
-            if (radio) radio.checked = true;
-        }
-
-        // set map extent
-        if (payload.bbox !== undefined) {
-            const extent = transformExtent(payload.bbox, 'EPSG:4326', 'EPSG:3857');
-            map.getView().fit(extent, { size: map.getSize() });
-        }
-
-        // Wait for features in the map to load
-        const renderDone = new Promise(resolve => map.once('rendercomplete', resolve));
-        map.render();
-        await renderDone;
-
-        syncViews();
-        syncPlot();
-        if (payload.load === true) {
-            fullLoadPlot();
-        }
-    }
-
-    function syncViews(){
-        let opts = getOpts();
-        if(nonlocals.nwmLayer)
-            updateNwmLayerStyle(nonlocals.nwmLayer, opts);
-        if(nonlocals.gageLayer)
-            updateGageLayerStyle(nonlocals.gageLayer, opts);
-        if(opts.select == 'reaches'){
-            orderSlider.noUiSlider.enable();
-        } else {
-            orderSlider.noUiSlider.disable();
-        }
-        if(nonlocals.loadButton){
-            if(opts.select == 'none'){
-                nonlocals.loadButton.disabled = true;
-            } else {
-                nonlocals.loadButton.disabled = false;
-            }
-        }
-    }
-
-    /**
-     * Gather an options dict from the UI
-     */
-    function getOpts(){
-        let opts = {model: 'mrnbm', steps: 18};
-        opts['model'] = document.querySelector(`select[name="model"]`).value;
-        opts['maxFeatures'] = document.querySelector(`input[name="max-features"]`).value
-        opts['orderMin'] = Math.round(orderSlider.noUiSlider.get(true)[0]);
-        opts['orderMax'] = Math.round(orderSlider.noUiSlider.get(true)[1]);
-        opts['select'] = document.querySelector(`input[name="select"]:checked`).value;
-        opts['series'] = document.querySelector(`input[name="series"]:checked`).value;
-        opts['yLog'] = document.querySelector(`input[name="ylog"]:checked`).value;
-        return opts;
-    }
-
-    function syncPlot(){
-        let opts = getOpts();
-        loadPlot(opts);
-    }
-
-    /**
-     * Loads only new data for existing selected features, if possible.
-     */
-    function dataLoadPlot(){
-        if(!last_data){
-            fullLoadPlot();
-        } else {
-            last_data['uqs'] = false;
-            syncPlot();
-        }
-    }
-
-    /**
-     * Loads the plot from scratch, forcing new features sampling and plot data loading.
-     */
-    function fullLoadPlot(){
-        last_data = false;
-        syncPlot();
-    }
-
-    function updateFeaturesLoaded(addLoaded){
-        loadedFeatures += addLoaded;
-        let el = document.getElementById('loaded-features');
-        let max = loadingFeatures;
-        let value = loadedFeatures;
-        el.style.width = `${100*value/max}%`;
-        el.setAttribute('aria-valuenow', value);
-        el.setAttribute('aria-valuemax', max);
-        el.innerText = `${value} / ${max}`;
-        if(value != max){
-            el.className += ' progress-bar-striped progress-bar-animated';
-        } else {
-            el.className = el.className.replace(/progress-bar-(striped|animated)/g,'');
-        }
-    }
-
-
-    // Load and Go...
-    let config = await fetch(new URL('config/lunch.json', window.location), fetchOptions);
-    let configjson = await config.json();
-    const reaches_config = configjson.data_sources.reaches;
-    const gages_config = configjson.data_sources.gages;
-    const totda_config = configjson.data_sources.totda;
-    const dastore = new zarr.FetchStore(new URL(totda_config.url, window.location), storeOptions);
-    const daroot = zarr.root(dastore);
-    const za_da_fids = await zarr.open(daroot.resolve('id'), {kind:'array'});
-    const da_feature_ids = await zarr.get(za_da_fids);
-    // Go ahead and load all drainage area data, it's worth the memory cost...
-    let za_totda = await zarr.open(daroot.resolve('totda'), {kind: 'array'});
-    totda_all = await zarr.get(za_totda);
-
+function syncViews(){
     let opts = getOpts();
-    nonlocals.nwmLayer = getReachesLayer(reaches_config);
-    nonlocals.gageLayer = getGagesLayer(gages_config);
-    nonlocals.loadButton = document.getElementById('btn-sync');
-    map.addLayer(nonlocals.nwmLayer);
-    map.addLayer(nonlocals.gageLayer);
-    updateNwmLayerStyle(nonlocals.nwmLayer, opts);
-    updateGageLayerStyle(nonlocals.gageLayer, opts);
-    let modeldefs = await fetch(new URL('config/model_defs.json', window.location), fetchOptions);
-    let modeldefsjson = await modeldefs.json();
-    models = modeldefsjson;
-    populateModelSelect();
-
-    // Expose to window for debugging
-    window.zarr = zarr;
-    
-    window.models = models;
-    window.map = map;
-    window.nwmLayer = nonlocals.nwmLayer;
-
-    window.updateNwmLayerStyle = updateNwmLayerStyle;
-    window.seriesForReach = seriesForReach;
-    window.syncViews = syncViews;
-    window.syncPlot = syncPlot;
-    window.dataLoadPlot = dataLoadPlot;
-    window.fullLoadPlot = fullLoadPlot;
-    window.populateModelSelect = populateModelSelect;
-    window.syncAnchor = syncAnchor;
-
-    // Call syncAnchor on page load if an anchor is present, and on subsequent hash changes
-    window.addEventListener('hashchange', syncAnchor);
-    if (window.location.hash && window.location.hash.length > 1) {
-        syncAnchor();
+    if(nonlocals.nwmLayer)
+        updateNwmLayerStyle(nonlocals.nwmLayer, opts);
+    if(nonlocals.gageLayer)
+        updateGageLayerStyle(nonlocals.gageLayer, opts);
+    if(opts.select == 'reaches'){
+        orderSlider.noUiSlider.enable();
+    } else {
+        orderSlider.noUiSlider.disable();
     }
+    if(nonlocals.loadButton){
+        if(opts.select == 'none'){
+            nonlocals.loadButton.disabled = true;
+        } else {
+            nonlocals.loadButton.disabled = false;
+        }
+    }
+}
+
+/**
+ * Gather an options dict from the UI
+ */
+function getOpts(){
+    let opts = {model: 'mrnbm', steps: 18};
+    opts['model'] = document.querySelector(`select[name="model"]`).value;
+    opts['maxFeatures'] = document.querySelector(`input[name="max-features"]`).value
+    opts['orderMin'] = Math.round(orderSlider.noUiSlider.get(true)[0]);
+    opts['orderMax'] = Math.round(orderSlider.noUiSlider.get(true)[1]);
+    opts['select'] = document.querySelector(`input[name="select"]:checked`).value;
+    opts['series'] = document.querySelector(`input[name="series"]:checked`).value;
+    opts['yLog'] = document.querySelector(`input[name="ylog"]:checked`).value;
+    return opts;
+}
+
+function syncPlot(){
+    let opts = getOpts();
+    loadPlot(opts);
+}
+
+/**
+ * Loads only new data for existing selected features, if possible.
+ */
+function dataLoadPlot(){
+    if(!last_data){
+        fullLoadPlot();
+    } else {
+        last_data['uqs'] = false;
+        syncPlot();
+    }
+}
+
+/**
+ * Loads the plot from scratch, forcing new features sampling and plot data loading.
+ */
+function fullLoadPlot(){
+    last_data = false;
+    syncPlot();
+}
+
+function updateFeaturesLoaded(addLoaded){
+    loadedFeatures += addLoaded;
+    let el = document.getElementById('loaded-features');
+    let max = loadingFeatures;
+    let value = loadedFeatures;
+    el.style.width = `${100*value/max}%`;
+    el.setAttribute('aria-valuenow', value);
+    el.setAttribute('aria-valuemax', max);
+    el.innerText = `${value} / ${max}`;
+    if(value != max){
+        el.className += ' progress-bar-striped progress-bar-animated';
+    } else {
+        el.className = el.className.replace(/progress-bar-(striped|animated)/g,'');
+    }
+}
+
+
+// Load and Go...
+let config = await fetch(new URL('config/lunch.json', window.location), fetchOptions);
+let configjson = await config.json();
+const reaches_config = configjson.data_sources.reaches;
+const gages_config = configjson.data_sources.gages;
+const totda_config = configjson.data_sources.totda;
+const dastore = new zarr.FetchStore(new URL(totda_config.url, window.location), storeOptions);
+const daroot = zarr.root(dastore);
+const za_da_fids = await zarr.open(daroot.resolve('id'), {kind:'array'});
+const da_feature_ids = await zarr.get(za_da_fids);
+// Go ahead and load all drainage area data, it's worth the memory cost...
+let za_totda = await zarr.open(daroot.resolve('totda'), {kind: 'array'});
+totda_all = await zarr.get(za_totda);
+
+let opts = getOpts();
+nonlocals.nwmLayer = getReachesLayer(reaches_config);
+nonlocals.gageLayer = getGagesLayer(gages_config);
+nonlocals.loadButton = document.getElementById('btn-sync');
+map.addLayer(nonlocals.nwmLayer);
+map.addLayer(nonlocals.gageLayer);
+updateNwmLayerStyle(nonlocals.nwmLayer, opts);
+updateGageLayerStyle(nonlocals.gageLayer, opts);
+let modeldefs = await fetch(new URL('config/model_defs.json', window.location), fetchOptions);
+let modeldefsjson = await modeldefs.json();
+models = modeldefsjson;
+populateModelSelect();
+
+// Expose to window for debugging
+window.zarr = zarr;
+
+window.models = models;
+window.map = map;
+window.nwmLayer = nonlocals.nwmLayer;
+
+window.updateNwmLayerStyle = updateNwmLayerStyle;
+window.seriesForReach = seriesForReach;
+window.syncViews = syncViews;
+window.syncPlot = syncPlot;
+window.dataLoadPlot = dataLoadPlot;
+window.fullLoadPlot = fullLoadPlot;
+window.populateModelSelect = populateModelSelect;
+window.syncAnchor = syncAnchor;
+
+// Call syncAnchor on page load if an anchor is present, and on subsequent hash changes
+window.addEventListener('hashchange', syncAnchor);
+if (window.location.hash && window.location.hash.length > 1) {
+    syncAnchor();
+}
 
