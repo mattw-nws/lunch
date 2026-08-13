@@ -131,20 +131,7 @@
         loadButton: null,
     }
 
-    // // Get drainage area values
-    // let response = await fetch('/appdata/uq/jsbti.json');
-    // if(!response.ok){
-    //     throw new Error(`Failed retrieving drainage area data! (${response.status})`);
-    // }
-    // const jsbti = await response.json();
-    // Get drainage area values
-    const dastore = new zarr.FetchStore(new URL('/appdata/totda.zarr', window.location), storeOptions);
-    const daroot = zarr.root(dastore);
-    const za_da_fids = await zarr.open(daroot.resolve('id'), {kind:'array'});
-    const da_feature_ids = await zarr.get(za_da_fids);
-    // Go ahead and load all drainage area data, it's worth the memory cost...
-    let za_totda = await zarr.open(daroot.resolve('totda'), {kind: 'array'});
-    let totda_all = await zarr.get(za_totda);
+    let totda_all;
 
     async function warmUpModelMetadata(model){        
         const modelinfo = models[model];
@@ -738,6 +725,15 @@
     let configjson = await config.json();
     const reaches_config = configjson.data_sources.reaches;
     const gages_config = configjson.data_sources.gages;
+    const totda_config = configjson.data_sources.totda;
+    const dastore = new zarr.FetchStore(new URL(totda_config.url, window.location), storeOptions);
+    const daroot = zarr.root(dastore);
+    const za_da_fids = await zarr.open(daroot.resolve('id'), {kind:'array'});
+    const da_feature_ids = await zarr.get(za_da_fids);
+    // Go ahead and load all drainage area data, it's worth the memory cost...
+    let za_totda = await zarr.open(daroot.resolve('totda'), {kind: 'array'});
+    totda_all = await zarr.get(za_totda);
+
     let opts = getOpts();
     nonlocals.nwmLayer = getReachesLayer(reaches_config);
     nonlocals.gageLayer = getGagesLayer(gages_config);

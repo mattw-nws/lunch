@@ -6,6 +6,9 @@
         },
         "gages": {
             "url": "/appdata/static/assim_gages_geo.json"
+        },
+        "totda": {
+            "url": "/appdata/totda/totda.zarr"
         }
     }
 }
